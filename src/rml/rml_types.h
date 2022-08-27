@@ -220,6 +220,10 @@ typedef void (*prte_rml_buffer_callback_fn_t)(int status, pmix_proc_t *peer,
 /* error propagate  */
 #define PRTE_RML_TAG_PROPAGATE 71
 
+/* tag for malleability support */
+#define PRTE_RML_TAG_MALLEABILITY 72
+
+
 #define PRTE_RML_TAG_MAX 100
 
 #define PRTE_RML_TAG_NTOH(t) ntohl(t)

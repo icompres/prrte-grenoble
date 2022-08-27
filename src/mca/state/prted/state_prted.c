@@ -373,7 +373,23 @@ static void track_procs(int fd, short argc, void *cbdata)
         goto cleanup;
     }
 
-    pdata = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
+    /* Account for rank dynamicity */
+    //pdata = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
+    size_t pr;
+    bool found = false;
+    for(pr = 0 ; pr < jdata->procs->size; pr++){
+        if(NULL == (pdata = prte_pointer_array_get_item(jdata->procs, pr))){
+            continue;
+        }
+        if(pdata->name.rank == proc->rank){
+            found = true;
+            break;
+        }
+    }
+    if(!found){
+        pdata = NULL;
+    }
+
     if (NULL == pdata) {
         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
         goto cleanup;
@@ -515,8 +531,10 @@ static void track_procs(int fd, short argc, void *cbdata)
             goto cleanup;
         }
         /* track job status */
-        if (jdata->num_terminated == jdata->num_local_procs
-            && !prte_get_attribute(&jdata->attributes, PRTE_JOB_TERM_NOTIFIED, NULL, PMIX_BOOL)) {
+        /* FIXME: Removed "jdata->num_terminated == jdata->num_local_procs &&" 
+         * so master is informed about every termination. Scalability!!
+         */
+        if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_TERM_NOTIFIED, NULL, PMIX_BOOL)) {
             /* pack update state command */
             cmd = PRTE_PLM_UPDATE_PROC_STATE;
             PMIX_DATA_BUFFER_CREATE(alert);
@@ -542,6 +560,11 @@ static void track_procs(int fd, short argc, void *cbdata)
                 PRTE_ERROR_LOG(rc);
                 PMIX_DATA_BUFFER_RELEASE(alert);
             }
+        }
+        
+        /* FIXME: Now as before only when ALL local procs terminated */
+        if (jdata->num_terminated == jdata->num_local_procs && !prte_get_attribute(&jdata->attributes, PRTE_JOB_TERM_NOTIFIED, NULL, PMIX_BOOL)){
+
             /* mark that we sent it so we ensure we don't do it again */
             prte_set_attribute(&jdata->attributes, PRTE_JOB_TERM_NOTIFIED, PRTE_ATTR_LOCAL, NULL,
                                PMIX_BOOL);
@@ -558,7 +581,7 @@ static void track_procs(int fd, short argc, void *cbdata)
                     pmix_pointer_array_set_item(prte_local_children, i, NULL);
                     PMIX_RELEASE(pptr); // maintain accounting
                 }
-            }
+            }  
             /* tell the IOF that the job is complete */
             if (NULL != prte_iof.complete) {
                 prte_iof.complete(jdata);

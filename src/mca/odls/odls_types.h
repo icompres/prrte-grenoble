@@ -90,6 +90,23 @@ typedef uint8_t prte_daemon_cmd_flag_t;
 /* tell DVM daemons to cleanup resources from job */
 #define PRTE_DAEMON_DVM_CLEANUP_JOB_CMD (prte_daemon_cmd_flag_t) 34
 
+/* commands needed for malleability. This probably belongs somewhere else */
+#define PRTE_DYNRES_DEFINE_PSET (prte_daemon_cmd_flag_t) 42
+
+#define PRTE_DYNRES_SERVER_PSETOP (prte_daemon_cmd_flag_t) 43
+
+#define PRTE_DYNRES_CLIENT_PSETOP (prte_daemon_cmd_flag_t) 44
+
+#define PRTE_DYNRES_DEFINE_RES_CHANGE (prte_daemon_cmd_flag_t) 45
+
+#define PRTE_DYNRES_UNPUBLISH_RES_CHANGE (prte_daemon_cmd_flag_t) 46
+
+#define PRTE_DYNRES_FINALIZE_RES_CHANGE (prte_daemon_cmd_flag_t) 47
+
+#define PRTE_DYNRES_LOCAL_PROCS_FINALIZED (prte_daemon_cmd_flag_t) 48
+
+
+
 /*
  * Struct written up the pipe from the child to the parent.
  */

@@ -788,6 +788,7 @@ void prte_plm_base_launch_apps(int fd, short args, void *cbdata)
     prte_job_t *jdata;
     prte_daemon_cmd_flag_t command;
     int rc;
+    bool sub = false;
     PRTE_HIDE_UNUSED_PARAMS(fd, args);
 
     PMIX_ACQUIRE_OBJECT(caddy);
@@ -795,7 +796,7 @@ void prte_plm_base_launch_apps(int fd, short args, void *cbdata)
     /* convenience */
     jdata = caddy->jdata;
 
-    if (PRTE_JOB_STATE_LAUNCH_APPS != caddy->job_state) {
+    if (PRTE_JOB_STATE_LAUNCH_APPS != caddy->job_state && !(sub = PRTE_JOB_STATE_SUB == caddy->job_state)) {
         PRTE_ACTIVATE_JOB_STATE(caddy->jdata, PRTE_JOB_STATE_NEVER_LAUNCHED);
         PMIX_RELEASE(caddy);
         return;
@@ -822,9 +823,14 @@ void prte_plm_base_launch_apps(int fd, short args, void *cbdata)
     }
 
     /* get the local launcher's required data */
-    if (PRTE_SUCCESS != (rc = prte_odls.get_add_procs_data(&jdata->launch_msg, jdata->nspace))) {
-        PRTE_ERROR_LOG(rc);
-        PRTE_ACTIVATE_JOB_STATE(caddy->jdata, PRTE_JOB_STATE_NEVER_LAUNCHED);
+    if(!sub){
+        if (PRTE_SUCCESS != (rc = prte_odls.get_add_procs_data(&jdata->launch_msg, jdata->nspace))) {
+            PRTE_ERROR_LOG(rc);
+            PRTE_ACTIVATE_JOB_STATE(caddy->jdata, PRTE_JOB_STATE_NEVER_LAUNCHED);
+        }
+    }else{
+        prte_odls_base_default_get_sub_procs_data(&jdata->launch_msg, jdata->nspace, jdata);
+        caddy->jdata = NULL;
     }
 
     PMIX_RELEASE(caddy);

@@ -115,6 +115,7 @@ static pmix_server_module_t pmix_server = {
     .iof_pull = pmix_server_iof_pull_fn,
     .push_stdin = pmix_server_stdin_fn,
     .group = pmix_server_group_fn
+    .pset_operation = pset_operation_fn
 };
 
 typedef struct {
@@ -502,6 +503,80 @@ static void eviction_cbfunc(struct pmix_hotel_t *hotel, int room_num, void *occu
     PMIX_RELEASE(req);
 }
 
+
+void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
+                       const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
+                       pmix_info_t results[], size_t nresults,
+                       pmix_event_notification_cbfunc_fn_t cbfunc, void *cbdata){
+
+    pmix_status_t ret = PMIX_ERR_BAD_PARAM;
+    size_t n, sz;
+    pmix_data_buffer_t *buf;
+    char *rc_pset = NULL;
+    prte_daemon_cmd_flag_t command = PRTE_DYNRES_UNPUBLISH_RES_CHANGE;
+    pmix_proc_t target;
+    bool exit = true;
+
+    /* get the name of the delta pset */
+    for(n = 0; n < ninfo; n++){
+        if(PMIX_CHECK_KEY(&info[n], PMIX_PSET_NAME)){
+            PMIX_VALUE_UNLOAD(ret, &info[n].value, (void**)&rc_pset, &sz);
+            if(PMIX_SUCCESS == ret){
+                break;
+            }
+        }
+    }
+
+    /* without a name theres nothing we can do */
+    if(PMIX_SUCCESS != ret){
+        cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
+        PMIX_ERROR_LOG(ret);
+        return;
+
+
+    /* If it is a resource substrcation: Do not delete the resource change as we need to wait for clients to finalize */ 
+    prte_res_change_t *res_change;
+    PRTE_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+        if(0 == strcmp(res_change->rc_pset, rc_pset)){
+            if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
+                break;
+            }
+            exit = false;
+            break;
+        }
+    }
+
+    if(exit){
+        cbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, cbdata);
+        return;
+    }
+
+    
+    /* send a message to local daemon (i.e. myself) to delete the resource change */        
+    PMIX_DATA_BUFFER_CREATE(buf);
+    /* pack the command */
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &command, 1, PMIX_UINT8))){
+        PMIX_DATA_BUFFER_RELEASE(buf);
+        cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+    /* pack the delta pset name of the resource change */
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &rc_pset, 1, PMIX_STRING))){
+        PMIX_DATA_BUFFER_RELEASE(buf);
+        cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+    
+    prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+    
+    
+    cbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, cbdata);
+
+}
+
+
 /* NOTE: this function must be called from within an event! */
 void prte_pmix_server_clear(pmix_proc_t *pname)
 {
@@ -582,6 +657,7 @@ int pmix_server_init(void)
     /* setup the server's state variables */
     PMIX_CONSTRUCT(&prte_pmix_server_globals.reqs, pmix_hotel_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.psets, pmix_list_t);
+    PRTE_CONSTRUCT(&prte_pmix_server_globals.res_changes, prte_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.tools, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.local_reqs, pmix_pointer_array_t);
     pmix_pointer_array_init(&prte_pmix_server_globals.local_reqs, 128, INT_MAX, 2);
@@ -866,6 +942,11 @@ int pmix_server_init(void)
     PRTE_PMIX_WAIT_THREAD(&lock);
     PRTE_PMIX_DESTRUCT_LOCK(&lock);
 
+    /* register the resource change finalization handler */
+    prte_status_t event_code = PMIX_RC_FINALIZED;
+    prc = PMIx_Register_event_handler(&event_code, 1, NULL, 0, rc_finalize_handler, NULL, NULL);
+
+
     return rc;
 }
 
@@ -903,6 +984,11 @@ void pmix_server_start(void)
         PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_LOGGING,
                       PRTE_RML_PERSISTENT, pmix_server_log, NULL);
     }
+
+    /* setup recv for malleability commands */
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_MALLEABILITY, PRTE_RML_PERSISTENT,
+                            pmix_server_dynres, NULL);
+
 }
 
 void pmix_server_finalize(void)
@@ -921,6 +1007,7 @@ void pmix_server_finalize(void)
     PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_LAUNCH_RESP);
     PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_DATA_CLIENT);
     PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_NOTIFICATION);
+    PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_MALLEABILITY);
     if (PRTE_PROC_IS_MASTER || PRTE_PROC_IS_MASTER) {
         PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_LOGGING);
     }
@@ -941,6 +1028,7 @@ void pmix_server_finalize(void)
     PMIX_DESTRUCT(&prte_pmix_server_globals.local_reqs);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.notifications);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.psets);
+    PRTE_LIST_DESTRUCT(&prte_pmix_server_globals.res_changes);
 
     /* shutdown the local server */
     prte_pmix_server_globals.initialized = false;
@@ -1159,7 +1247,10 @@ static void pmix_server_dmdx_recv(int status, pmix_proc_t *sender, pmix_data_buf
         }
         return;
     }
-    if (NULL == (proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, pproc.rank))) {
+
+    /* for dynamicity we need to account for arbitrary ranks in jdata procs */
+    if (NULL == (proc = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, pproc.rank))) {
+    //if (NULL == (proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, pproc.rank))) {
         /* this is truly an error, so notify the sender */
         send_error(PRTE_ERR_NOT_FOUND, &pproc, sender, room_num);
         return;
@@ -1631,6 +1722,8 @@ static void psdes(pmix_server_pset_t *p)
     }
 }
 PMIX_CLASS_INSTANCE(pmix_server_pset_t, pmix_list_item_t, pscon, psdes);
+PMIX_CLASS_INSTANCE(prte_res_change_t, prte_list_item_t, NULL, NULL);
+
 
 static void tlcon(prte_pmix_tool_t *p)
 {

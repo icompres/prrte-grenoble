@@ -42,6 +42,11 @@ PRTE_EXPORT void prte_pmix_server_clear(pmix_proc_t *pname);
 
 PRTE_EXPORT void pmix_server_notify_spawn(pmix_nspace_t jobid, int room, pmix_status_t ret);
 
+PRTE_EXPORT void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
+                       const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
+                       pmix_info_t results[], size_t nresults,
+                       pmix_event_notification_cbfunc_fn_t cbfunc, void *cbdata);
+
 END_C_DECLS
 
 #endif /* PMIX_SERVER_H_ */

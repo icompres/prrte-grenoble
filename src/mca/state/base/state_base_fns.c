@@ -615,7 +615,24 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         goto cleanup;
     }
 
-    pdata = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
+    /* Account for rank dynamicity */
+    //pdata = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
+    size_t pr;
+    bool found = false;
+    for(pr = 0 ; pr < jdata->procs->size; pr++){
+        if(NULL == (pdata = prte_pointer_array_get_item(jdata->procs, pr))){
+            continue;
+        }
+        if(pdata->name.rank == proc->rank){
+            found = true;
+            break;
+        }
+    }
+    if(!found){
+        pdata = NULL;
+    }
+
+
     if (NULL == pdata) {
         goto cleanup;
     }
@@ -710,8 +727,59 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
             PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_DAEMONS_TERMINATED);
             goto cleanup;
         }
-        /* track job status */
+        /* track job status & resource change status */
         jdata->num_terminated++;
+        //printf("%d of %d in the job terminated\n", jdata->num_terminated, jdata->num_procs);
+
+        size_t p;
+        prte_res_change_t *res_change;
+        PRTE_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+            pmix_server_pset_t *pset;
+            PRTE_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+                if(0 == strcmp(res_change->rc_pset, pset->name)){
+                    
+                    for(p = 0; p < pset->num_members; p++){
+                        if(PMIX_CHECK_PROCID(&pdata->name, &pset->members[p])){
+                            res_change->nglobalprocs_terminated++;
+                        }
+                    }
+                    break;
+                }
+            }
+            if(res_change->nglobalprocs_terminated == res_change->nprocs){
+                prte_job_t *daemon_job = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
+                pmix_data_buffer_t *buf;
+                make_timestamp_base(&cur_master_timing_frame->rc_finalized);
+                prte_daemon_cmd_flag_t command = PRTE_DYNRES_FINALIZE_RES_CHANGE;
+                pmix_status_t ret;
+                pmix_proc_t _target;
+                PMIX_LOAD_NSPACE(_target.nspace, PRTE_PROC_MY_NAME->nspace);
+                char *rc_pset = (char*) malloc(PMIX_MAX_KEYLEN);
+                strncpy(rc_pset, res_change->rc_pset, PMIX_MAX_KEYLEN);
+                
+                for(p = 0; p < daemon_job->num_procs; p++){
+                    _target.rank = p;
+
+                    PMIX_DATA_BUFFER_CREATE(buf);
+                    /* pack the command */
+                    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &command, 1, PMIX_UINT8))){
+                        PMIX_DATA_BUFFER_RELEASE(buf);
+                        PMIX_ERROR_LOG(ret);
+                        return;
+                    }
+                    /* pack the delta pset name of the resource change */
+                    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &rc_pset, 1, PMIX_STRING))){
+                        PMIX_DATA_BUFFER_RELEASE(buf);
+                        PMIX_ERROR_LOG(ret);
+                        return;
+                    }
+                    //printf("sending RES_CHANGE_FINALIZE to %s\n", PRTE_NAME_PRINT(&_target));
+                    prte_rml.send_buffer_nb(&_target, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+                }
+                free(rc_pset);
+            }
+        }
+
         if (jdata->num_terminated == jdata->num_procs) {
             /* if requested, check fd status for leaks */
             if (prte_state_base_run_fdcheck) {

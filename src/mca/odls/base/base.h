@@ -49,6 +49,8 @@ PRTE_EXPORT void prte_odls_base_start_threads(prte_job_t *jdata);
 
 PRTE_EXPORT void prte_odls_base_harvest_threads(void);
 
+PRTE_EXPORT int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_nspace_t job, prte_job_t *job_data);
+
 #define PRTE_ODLS_SET_ERROR(ns, s, j)                                                   \
 do {                                                                                    \
     int _idx;                                                                           \

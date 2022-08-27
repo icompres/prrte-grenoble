@@ -402,8 +402,9 @@ static void proc_errors(int fd, short args, void *cbdata)
                  "%s errmgr:prted:proc_errors comm_failed to non-daemon - handling as waitpid",
                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
             /* get the proc_t */
+            /* EDIT: Account for rank dynamicity */
             if (NULL
-                == (child = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs,
+                == (child = (prte_proc_t *) prte_get_proc_object_by_rank(jdata,
                                                                         proc->rank))) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
@@ -457,9 +458,11 @@ static void proc_errors(int fd, short args, void *cbdata)
         goto cleanup;
     }
 
-    if (NULL == (child = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank))) {
+    /* EDIT: Account for rank dynamicity */
+    if (NULL == (child = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, proc->rank, proc->rank))) {
         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
-        PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
+        /* FIXME: Prevent forced exit. Is this still needed? */
+        //PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         goto cleanup;
     }
     /* if this is not a local proc for this job, we can

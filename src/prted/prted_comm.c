@@ -259,6 +259,16 @@ void prte_daemon_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffe
         }
         break;
 
+        /****    SUB_LOCAL_PROCS   ****/
+    case PRTE_DAEMON_DVM_SUB_PROCS:
+        if (PRTE_SUCCESS != (ret = prte_odls_base_default_update_pmix_server_data(buffer))) {
+            PRTE_OUTPUT_VERBOSE((1, prte_debug_output,
+                                 "%s prted:comm:add_procs failed to launch on error %s",
+                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_ERROR_NAME(ret)));
+        }
+        break;
+
+
     case PRTE_DAEMON_ABORT_PROCS_CALLED:
         if (prte_debug_daemons_flag) {
             prte_output(0, "%s prted_cmd: received abort_procs report",
@@ -696,6 +706,9 @@ static char *get_prted_comm_cmd_str(int command)
 
     case PRTE_DAEMON_DVM_ADD_PROCS:
         return strdup("PRTE_DAEMON_DVM_ADD_PROCS");
+
+    case PRTE_DAEMON_DVM_SUB_PROCS:
+        return strdup("PRTE_DAEMON_DVM_SUB_PORCS");
 
     case PRTE_DAEMON_GET_STACK_TRACES:
         return strdup("PRTE_DAEMON_GET_STACK_TRACES");

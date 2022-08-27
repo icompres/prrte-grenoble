@@ -767,6 +767,11 @@ int main(int argc, char *argv[])
     }
     ret = PRTE_SUCCESS;
 
+    /* Initialize the daemon timing list */
+    timings_my_rank = PRTE_PROC_MY_NAME->rank;
+    daemon_timing_list = (node_t*)calloc(1, sizeof(node_t));
+
+
     /* loop the event lib until an exit event is detected */
     while (prte_event_base_active) {
         prte_event_loop(prte_event_base, PRTE_EVLOOP_ONCE);

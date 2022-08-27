@@ -296,7 +296,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         if (NULL != parent && !PRTE_FLAG_TEST(parent, PRTE_JOB_FLAG_TOOL)) {
             if (NULL == parent->bookmark) {
                 /* find the sender's node in the job map */
-                proc = (prte_proc_t *) pmix_pointer_array_get_item(parent->procs, sender->rank);
+                proc = (prte_proc_t *) prte_get_proc_object_by_rank(parent->procs, sender->rank);
                 if (NULL != proc) {
                     /* set the bookmark so the child starts from that place - this means
                      * that the first child process could be co-located with the proc
@@ -365,6 +365,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                             "%s plm:base:receive update proc state command from %s",
                             PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(sender)));
+        
         count = 1;
         rc = PMIx_Data_unpack(NULL, buffer, &job, &count, PMIX_PROC_NSPACE);
         while (PMIX_SUCCESS == rc) {
@@ -376,6 +377,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             /* get the job object */
             jdata = prte_get_job_data_object(job);
             count = 1;
+            running = false;
             rc = PMIx_Data_unpack(NULL, buffer, &vpid, &count, PMIX_PROC_RANK);
             while (PMIX_SUCCESS == rc) {
                 if (PMIX_RANK_INVALID == vpid) {
@@ -397,6 +399,10 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                     PMIX_ERROR_LOG(rc);
                     goto CLEANUP;
                 }
+                if (PRTE_PROC_STATE_RUNNING == state) {
+                    running = true;
+                }
+
                 /* unpack the exit code */
                 count = 1;
                 rc = PMIx_Data_unpack(NULL, buffer, &exit_code, &count, PMIX_INT32);
@@ -412,11 +418,38 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
 
                 if (NULL != jdata) {
                     /* get the proc data object */
-                    proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+
+                    /* FIXME: This is a workaround to avoid abortion if proc not found
+                     * This already accounts for dynamicity of ranks in jdata
+                     * Still sometimes the proc is not found
+                     * --> this is a weird bug and hard to track down.
+                     */
+                    //proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+                    size_t pr;
+                    bool found = false;
+                    for(pr = 0 ; pr < jdata->procs->size; pr++){
+                        if(NULL == (proc = prte_pointer_array_get_item(jdata->procs, pr))){
+                            continue;
+                        }
+                        if(proc->name.rank == vpid){
+                            found = true;
+                            break;
+                        }
+                        /*
+                        printf("%s state:prted:track_procs called for proc %s state %s\n, %d: --->found %s\n",
+                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(proc),
+                                     prte_proc_state_to_str(state), pr, PRTE_NAME_PRINT(&pdata->name));
+                        */
+                    }
+                    if(!found){
+                        proc = NULL;
+                    }
+                    
                     if (NULL == proc) {
                         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
-                        PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
-                        goto CLEANUP;
+                        //PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
+                        //goto CLEANUP;
+                        continue;
                     }
                     /* NEVER update the proc state before activating the state machine - let
                      * the state cbfunc update it as it may need to compare this

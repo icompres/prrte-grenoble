@@ -133,6 +133,7 @@ typedef int32_t prte_job_state_t;
 #define PRTE_JOB_STATE_LOCAL_LAUNCH_COMPLETE 18 /* all local procs have attempted launch */
 #define PRTE_JOB_STATE_READY_FOR_DEBUG       19 /* all local procs report ready for debug */
 #define PRTE_JOB_STATE_STARTED               20 /* first process has been started */
+#define PRTE_JOB_STATE_SUB                   21 /* this job hold data for resource substraction*/
 
 /*
  * Define a "boundary" so we can easily and quickly determine

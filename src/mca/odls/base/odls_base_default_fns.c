@@ -150,6 +150,60 @@ done:
     PRTE_PMIX_WAKEUP_THREAD(&cd->lock);
 }
 
+static void setup_sub_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninfo,
+                         void *provided_cbdata, pmix_op_cbfunc_t cbfunc, void *cbdata)
+{
+    prte_odls_jcaddy_t *cd = (prte_odls_jcaddy_t *) provided_cbdata;
+    prte_job_t *jdata = cd->jdata;
+    pmix_data_buffer_t pbuf;
+    pmix_byte_object_t pbo;
+    int rc = PRTE_SUCCESS;
+
+    /* release any info */
+    if (NULL != cd->info) {
+        PMIX_INFO_FREE(cd->info, cd->ninfo);
+    }
+
+    PMIX_BYTE_OBJECT_CONSTRUCT(&pbo);
+    if (NULL != info) {
+        PMIX_DATA_BUFFER_CONSTRUCT(&pbuf);
+        /* pack the provided info */
+        if (PMIX_SUCCESS != (rc = PMIx_Data_pack(NULL, &pbuf, &ninfo, 1, PMIX_SIZE))) {
+            PMIX_ERROR_LOG(rc);
+            PMIX_DATA_BUFFER_DESTRUCT(&pbuf);
+            goto done;
+        }
+        if (PMIX_SUCCESS != (rc = PMIx_Data_pack(NULL, &pbuf, info, ninfo, PMIX_INFO))) {
+            PMIX_ERROR_LOG(rc);
+            PMIX_DATA_BUFFER_DESTRUCT(&pbuf);
+            goto done;
+        }
+        /* unload it */
+        rc = PMIx_Data_unload(&pbuf, &pbo);
+        if (PMIX_SUCCESS != rc) {
+            PMIX_ERROR_LOG(rc);
+        }
+    }
+    /* add the results */
+    rc = PMIx_Data_pack(NULL, &jdata->launch_msg, &pbo, 1, PMIX_BYTE_OBJECT);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+    }
+
+done:
+    PMIX_BYTE_OBJECT_DESTRUCT(&pbo);
+    /* release our caller */
+    if (NULL != cbfunc) {
+        cbfunc(rc, cbdata);
+    }
+
+
+    /* release the original thread */
+    PRTE_PMIX_WAKEUP_THREAD(&cd->lock);
+}
+
+
+
 /* IT IS CRITICAL THAT ANY CHANGE IN THE ORDER OF THE INFO PACKED IN
  * THIS FUNCTION BE REFLECTED IN THE CONSTRUCT_CHILD_LIST PARSER BELOW
  */
@@ -389,12 +443,461 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
     return rc;
 }
 
+int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_nspace_t job, prte_job_t *jdata)
+{
+    int rc, n;
+    prte_job_map_t *map = NULL;
+    pmix_data_buffer_t jobdata, priorjob;
+    int8_t flag;
+    prte_proc_t *proc;
+    pmix_info_t *info;
+    pmix_status_t ret;
+    prte_node_t *node;
+    int i, k;
+    char **list, **procs, **micro, *tmp, *regex;
+    prte_odls_jcaddy_t cd = {0};
+    prte_proc_t *pptr;
+    uint32_t uid;
+    uint32_t gid;
+    pmix_byte_object_t pbo;
+
+
+    /* get a pointer to the job map */
+    map = jdata->map;
+    /* if there is no map, just return */
+    if (NULL == map) {
+        return PRTE_SUCCESS;
+    }
+
+    
+    flag = 0;
+    rc = PMIx_Data_pack(NULL, buffer, &flag, 1, PMIX_INT8);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        return rc;
+    }
+
+    /* pack the job struct */
+    rc = prte_job_pack(buffer, jdata);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        return rc;
+    }
+
+    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+        /* compute and pack the ppn */
+        if (PRTE_SUCCESS != (rc = prte_util_generate_ppn(jdata, buffer))) {
+            PRTE_ERROR_LOG(rc);
+            return rc;
+        }
+    }
+    /* assemble the node and proc map info */
+    list = NULL;
+    procs = NULL;
+    cd.ninfo = 5;
+    PMIX_INFO_CREATE(cd.info, cd.ninfo);
+    for (i = 0; i < map->nodes->size; i++) {
+        micro = NULL;
+        if (NULL != (node = (prte_node_t *) prte_pointer_array_get_item(map->nodes, i))) {
+            prte_argv_append_nosize(&list, node->name);
+            /* assemble all the ranks for this job that are on this node */
+            for (k = 0; k < node->procs->size; k++) {
+                if (NULL != (pptr = (prte_proc_t *) prte_pointer_array_get_item(node->procs, k))) {
+                    if (PMIX_CHECK_NSPACE(jdata->nspace, pptr->name.nspace)) {
+                        prte_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
+                    }
+                }
+            }
+            /* assemble the rank/node map */
+            if (NULL != micro) {
+                tmp = prte_argv_join(micro, ',');
+                prte_argv_free(micro);
+                prte_argv_append_nosize(&procs, tmp);
+                free(tmp);
+            }
+        }
+    }
+    /* let the PMIx server generate the nodemap regex */
+    if (NULL != list) {
+        tmp = prte_argv_join(list, ',');
+        prte_argv_free(list);
+        list = NULL;
+        if (PMIX_SUCCESS != (ret = PMIx_generate_regex(tmp, &regex))) {
+            PMIX_ERROR_LOG(ret);
+            free(tmp);
+            PMIX_INFO_FREE(cd.info, cd.ninfo);
+            return prte_pmix_convert_status(ret);
+        }
+        free(tmp);
+        PMIX_INFO_LOAD(&cd.info[0], PMIX_NODE_MAP, regex, PMIX_REGEX);
+        free(regex);
+    }
+    /* let the PMIx server generate the procmap regex */
+    if (NULL != procs) {
+        tmp = prte_argv_join(procs, ';');
+        prte_argv_free(procs);
+        procs = NULL;
+        if (PMIX_SUCCESS != (ret = PMIx_generate_ppn(tmp, &regex))) {
+            PMIX_ERROR_LOG(ret);
+            free(tmp);
+            PMIX_INFO_FREE(cd.info, cd.ninfo);
+            return prte_pmix_convert_status(ret);
+        }
+        free(tmp);
+        PMIX_INFO_LOAD(&cd.info[1], PMIX_PROC_MAP, regex, PMIX_REGEX);
+        free(regex);
+    }
+
+    /* construct the actual request - we just let them pick the
+     * default transport for now. Someday, we will add to prun
+     * the ability for transport specifications */
+    (void) strncpy(cd.info[2].key, PMIX_ALLOC_NETWORK, PMIX_MAX_KEYLEN);
+    cd.info[2].value.type = PMIX_DATA_ARRAY;
+    PMIX_DATA_ARRAY_CREATE(cd.info[2].value.data.darray, 3, PMIX_INFO);
+    info = (pmix_info_t *) cd.info[2].value.data.darray->array;
+    asprintf(&tmp, "%s.net", jdata->nspace);
+    PMIX_INFO_LOAD(&info[0], PMIX_ALLOC_NETWORK_ID, tmp, PMIX_STRING);
+    free(tmp);
+    PMIX_INFO_LOAD(&info[1], PMIX_ALLOC_NETWORK_SEC_KEY, NULL, PMIX_BOOL);
+    PMIX_INFO_LOAD(&info[2], PMIX_SETUP_APP_ENVARS, NULL, PMIX_BOOL);
+
+    /* add in the user's uid and gid */
+    uid = geteuid();
+    PMIX_INFO_LOAD(&cd.info[3], PMIX_USERID, &uid, PMIX_UINT32);
+    gid = getegid();
+    PMIX_INFO_LOAD(&cd.info[4], PMIX_GRPID, &gid, PMIX_UINT32);
+
+    /* we don't want to block here because it could
+     * take some indeterminate time to get the info */
+    rc = PRTE_SUCCESS;
+    cd.jdata = jdata;
+    PRTE_PMIX_CONSTRUCT_LOCK(&cd.lock);
+    if (PMIX_SUCCESS
+        != (ret = PMIx_server_setup_application(jdata->nspace, cd.info, cd.ninfo, setup_sub_cbfunc,
+                                                &cd))) {
+        prte_output(0, "[%s:%d] PMIx_server_setup_application failed: %s", __FILE__, __LINE__,
+                    PMIx_Error_string(ret));
+        rc = PRTE_ERROR;
+    } else {
+        PRTE_PMIX_WAIT_THREAD(&cd.lock);
+    }
+    PRTE_PMIX_DESTRUCT_LOCK(&cd.lock);
+
+    return rc;
+}
+
 static void ls_cbunc(pmix_status_t status, void *cbdata)
 {
     prte_pmix_lock_t *lock = (prte_pmix_lock_t *) cbdata;
     PRTE_HIDE_UNUSED_PARAMS(status);
     PRTE_PMIX_WAKEUP_THREAD(lock);
 }
+
+/* registers the provided job data with the local pmix server,
+ * to allow PMIx Clients to access the new jobdata.
+ * However, this does neither change the damon's job data 
+ * nor internal pmix server accounting of local clients
+ */
+int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
+{
+    int rc;
+    int32_t cnt;
+    prte_job_t *jdata = NULL, *daemons;
+    prte_node_t *node;
+    pmix_rank_t dmnvpid, v;
+    int32_t n;
+    pmix_data_buffer_t dbuf, jdbuf;
+    prte_proc_t *pptr, *dmn;
+    prte_app_context_t *app;
+    int8_t flag;
+    prte_pmix_lock_t lock;
+    pmix_info_t *info = NULL;
+    size_t ninfo = 0;
+    pmix_status_t ret;
+    prte_daemon_cmd_flag_t cmd;
+    pmix_data_buffer_t pbuf;
+    pmix_byte_object_t bo, pbo;
+    size_t m;
+    pmix_envar_t envt;
+
+    if(NULL != cur_daemon_timing_frame)
+        make_timestamp_base(&cur_daemon_timing_frame->rc_apply_start);
+
+    PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
+                         "%s odls:update_pmix_server_data", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
+
+
+    /* get the daemon job object */
+    daemons = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
+    PRTE_PMIX_CONSTRUCT_LOCK(&lock);
+
+    /* remove dummy command inserted by get_launch_data */
+    cnt = 1;
+    rc = PMIx_Data_unpack(NULL, buffer, &cmd, &cnt, PMIX_UINT8);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        rc = prte_pmix_convert_status(rc);
+        goto REPORT_ERROR;
+    }
+
+    /* unpack the flag to see if new daemons were launched. Always 0! */
+    rc = PMIx_Data_unpack(NULL, buffer, &flag, &cnt, PMIX_INT8);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        rc = prte_pmix_convert_status(rc);
+        goto REPORT_ERROR;
+    }
+
+    /* unpack the job we are to launch */
+    rc = prte_job_unpack(buffer, &jdata);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        goto REPORT_ERROR;
+    }
+    if (PMIX_NSPACE_INVALID(jdata->nspace)) {
+        PRTE_ERROR_LOG(PRTE_ERR_BAD_PARAM);
+        rc = PRTE_ERR_BAD_PARAM;
+        goto REPORT_ERROR;
+    }
+
+    /* if we are the HNP, we don't need to unpack this buffer - we already
+     * have all the required info in our local job array. So just build the
+     * array of local children
+     */
+
+    /* ensure the map object is present */
+    if (NULL == jdata->map) {
+        jdata->map = PRTE_NEW(prte_job_map_t);
+    }
+
+    /* if the job is fully described, then mpirun will have computed
+     * and sent us the complete array of procs in the prte_job_t, so we
+     * don't need to do anything more here */
+    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+        /* load the ppn info into the job and node arrays - the
+         * function will ignore the data on the HNP as it already
+         * has the info */
+        if (PRTE_SUCCESS != (rc = prte_util_decode_ppn(jdata, buffer))) {
+            PRTE_ERROR_LOG(rc);
+            goto REPORT_ERROR;
+        }
+
+        if (!PRTE_PROC_IS_MASTER) {
+            /* assign locations to the procs */
+            if (PRTE_SUCCESS != (rc = prte_rmaps_base_assign_locations(jdata))) {
+                PRTE_ERROR_LOG(rc);
+                goto REPORT_ERROR;
+            }
+
+            /* compute the ranks and add the proc objects
+             * to the jdata->procs array */
+            if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_vpids(jdata))) {
+                PRTE_ERROR_LOG(rc);
+                goto REPORT_ERROR;
+            }
+        }
+
+        /* and finally, compute the local and node ranks */
+        if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_local_ranks(jdata))) {
+            PRTE_ERROR_LOG(rc);
+            goto REPORT_ERROR;
+        }
+    }
+    /* unpack the byte object containing any application setup info - there
+     * might not be any, so it isn't an error if we don't find things */
+    cnt = 1;
+    rc = PMIx_Data_unpack(NULL, buffer, &bo, &cnt, PMIX_BYTE_OBJECT);
+    if (PRTE_SUCCESS == rc && 0 < bo.size) {
+        /* there was setup data - process it */
+        PMIX_DATA_BUFFER_CONSTRUCT(&pbuf);
+        rc = PMIx_Data_load(&pbuf, &bo);
+        if (PMIX_SUCCESS != rc) {
+            PMIX_ERROR_LOG(rc);
+            goto REPORT_ERROR;
+        }
+        PMIX_BYTE_OBJECT_DESTRUCT(&bo);
+        /* unpack the number of info structs */
+        cnt = 1;
+        ret = PMIx_Data_unpack(NULL, &pbuf, &ninfo, &cnt, PMIX_SIZE);
+        if (PMIX_SUCCESS != ret) {
+            PMIX_ERROR_LOG(ret);
+            PMIX_DATA_BUFFER_DESTRUCT(&pbuf);
+            rc = PRTE_ERROR;
+            goto REPORT_ERROR;
+        }
+        PMIX_INFO_CREATE(info, ninfo);
+        cnt = ninfo;
+        ret = PMIx_Data_unpack(NULL, &pbuf, info, &cnt, PMIX_INFO);
+        if (PMIX_SUCCESS != ret) {
+            PMIX_ERROR_LOG(ret);
+            PMIX_INFO_FREE(info, ninfo);
+            PMIX_DATA_BUFFER_DESTRUCT(&pbuf);
+            rc = PRTE_ERROR;
+            goto REPORT_ERROR;
+        }
+        PMIX_DATA_BUFFER_DESTRUCT(&pbuf);
+        /* add any cache'd values to the front of the job attributes  */
+        for (m = 0; m < ninfo; m++) {
+            if (0 == strcmp(info[m].key, PMIX_SET_ENVAR)) {
+                envt.envar = strdup(info[m].value.data.envar.envar);
+                envt.value = strdup(info[m].value.data.envar.value);
+                envt.separator = info[m].value.data.envar.separator;
+                prte_prepend_attribute(&jdata->attributes, PRTE_JOB_SET_ENVAR, PRTE_ATTR_GLOBAL,
+                                       &envt, PMIX_ENVAR);
+            } else if (0 == strcmp(info[m].key, PMIX_ADD_ENVAR)) {
+                envt.envar = info[m].value.data.envar.envar;
+                envt.value = info[m].value.data.envar.value;
+                envt.separator = info[m].value.data.envar.separator;
+                prte_prepend_attribute(&jdata->attributes, PRTE_JOB_ADD_ENVAR, PRTE_ATTR_GLOBAL,
+                                       &envt, PMIX_ENVAR);
+            } else if (0 == strcmp(info[m].key, PMIX_UNSET_ENVAR)) {
+                prte_prepend_attribute(&jdata->attributes, PRTE_JOB_UNSET_ENVAR, PRTE_ATTR_GLOBAL,
+                                       info[m].value.data.string, PMIX_STRING);
+            } else if (0 == strcmp(info[m].key, PMIX_PREPEND_ENVAR)) {
+                envt.envar = info[m].value.data.envar.envar;
+                envt.value = info[m].value.data.envar.value;
+                envt.separator = info[m].value.data.envar.separator;
+                prte_prepend_attribute(&jdata->attributes, PRTE_JOB_PREPEND_ENVAR, PRTE_ATTR_GLOBAL,
+                                       &envt, PMIX_ENVAR);
+            } else if (0 == strcmp(info[m].key, PMIX_APPEND_ENVAR)) {
+                envt.envar = info[m].value.data.envar.envar;
+                envt.value = info[m].value.data.envar.value;
+                envt.separator = info[m].value.data.envar.separator;
+                prte_prepend_attribute(&jdata->attributes, PRTE_JOB_APPEND_ENVAR, PRTE_ATTR_GLOBAL,
+                                       &envt, PMIX_ENVAR);
+            }
+        }
+    }
+    /* now that the node array in the job map and jdata are completely filled out,.
+     * we need to "wireup" the procs to their nodes so other utilities can
+     * locate them */
+    for (n = 0; n < jdata->procs->size; n++) {
+        
+        if (NULL == (pptr = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, n))) {
+            continue;
+        }
+        if (PRTE_PROC_STATE_UNDEF == pptr->state) {
+            /* not ready for use yet */
+            continue;
+        }
+        
+        if (prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+            /* the parser will have already made the connection, but the fully described
+             * case won't have done it, so connect the proc to its node here */
+            prte_output_verbose(5, prte_odls_base_framework.framework_output,
+                                "%s GETTING DAEMON FOR PROC %s WITH PARENT %s",
+                                PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&pptr->name),
+                                PRTE_VPID_PRINT(pptr->parent));
+            if (PMIX_RANK_INVALID == pptr->parent) {
+                PRTE_ERROR_LOG(PRTE_ERR_BAD_PARAM);
+                rc = PRTE_ERR_BAD_PARAM;
+                goto REPORT_ERROR;
+            }
+            /* connect the proc to its node object */
+            if (NULL
+                == (dmn = (prte_proc_t *) prte_pointer_array_get_item(daemons->procs,
+                                                                      pptr->parent))) {
+                PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
+                rc = PRTE_ERR_NOT_FOUND;
+                goto REPORT_ERROR;
+            }
+            PRTE_RETAIN(dmn->node);
+            pptr->node = dmn->node;
+            /* add the node to the job map, if needed */
+            if (!PRTE_FLAG_TEST(pptr->node, PRTE_NODE_FLAG_MAPPED)) {
+                PRTE_RETAIN(pptr->node);
+                prte_pointer_array_add(jdata->map->nodes, pptr->node);
+                jdata->map->num_nodes++;
+                PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
+            }
+            /* add this proc to that node */
+            PRTE_RETAIN(pptr);
+            prte_pointer_array_add(pptr->node->procs, pptr);
+            pptr->node->num_procs++;
+            /* and connect it back to its job object, if not already done */
+            if (NULL == pptr->job) {
+                PRTE_RETAIN(jdata);
+                pptr->job = jdata;
+            }
+        }
+        /* see if it belongs to us */
+        if (pptr->parent == PRTE_PROC_MY_NAME->rank) {
+            /* is this child on our current list of children */
+            if (!PRTE_FLAG_TEST(pptr, PRTE_PROC_FLAG_LOCAL)) {
+                /* not on the local list */
+                PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
+                                     "%s[%s:%d] adding proc %s to my local list",
+                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), __FILE__, __LINE__,
+                                     PRTE_NAME_PRINT(&pptr->name)));
+                /* keep tabs of the number of local procs */
+                jdata->num_local_procs++;
+                /* add this proc to our child list */
+                PRTE_RETAIN(pptr);
+                PRTE_FLAG_SET(pptr, PRTE_PROC_FLAG_LOCAL);
+                prte_pointer_array_add(prte_local_children, pptr);
+            }
+
+            /* if the job is in restart mode, the child must not barrier when launched */
+            if (PRTE_FLAG_TEST(jdata, PRTE_JOB_FLAG_RESTART)) {
+                prte_set_attribute(&pptr->attributes, PRTE_PROC_NOBARRIER, PRTE_ATTR_LOCAL, NULL,
+                                   PMIX_BOOL);
+            }
+            /* mark that this app_context is being used on this node */
+            app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, pptr->app_idx);
+            PRTE_FLAG_SET(app, PRTE_APP_FLAG_USED_ON_NODE);
+        }
+    }
+
+    if (prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+        /* reset the mapped flags */
+        for (n = 0; n < jdata->map->nodes->size; n++) {
+            if (NULL
+                != (node = (prte_node_t *) prte_pointer_array_get_item(jdata->map->nodes, n))) {
+                PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
+            }
+        }
+    }
+
+    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+        /* compute and save bindings of local children */
+        if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_bindings(jdata))) {
+            PRTE_ERROR_LOG(rc);
+            goto REPORT_ERROR;
+        }
+    }
+    bool retain_nlocal = true;
+    prte_set_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, PRTE_ATTR_GLOBAL, &retain_nlocal, PMIX_BOOL);
+
+    /* register this job with the PMIx server - need to wait until after we
+     * have computed the #local_procs before calling the function */
+    if (PRTE_SUCCESS != (rc = prte_pmix_server_register_nspace(jdata))) {
+        PRTE_ERROR_LOG(rc);
+        goto REPORT_ERROR;
+    }
+
+    if (NULL != info) {
+        PMIX_INFO_FREE(info, ninfo);
+    }
+    if(NULL != cur_daemon_timing_frame)
+        make_timestamp_base(&cur_daemon_timing_frame->rc_apply_end);
+    return PRTE_SUCCESS;
+
+REPORT_ERROR:
+    PRTE_PMIX_DESTRUCT_LOCK(&lock);
+    if (NULL != info) {
+        PMIX_INFO_FREE(info, ninfo);
+    }
+    /* we have to report an error back to the HNP so we don't just
+     * hang. Although there shouldn't be any errors once this is
+     * all debugged, it is still good practice to have a way
+     * for it to happen - especially so developers don't have to
+     * deal with the hang!
+     */
+    PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_NEVER_LAUNCHED);
+    return rc;
+
+}
+
 
 int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix_nspace_t *job)
 {
@@ -417,6 +920,10 @@ int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix
     size_t m;
     pmix_envar_t envt;
     char *tmp;
+
+    if(NULL != cur_daemon_timing_frame)
+        make_timestamp_base(&cur_daemon_timing_frame->rc_apply_start);
+
 
     PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
                          "%s odls:constructing child list", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
@@ -566,7 +1073,10 @@ next:
             goto REPORT_ERROR;
         }
     } else {
-        prte_set_job_data_object(jdata);
+
+        /* This might be an update so we need to replace the job data */
+        prte_set_or_replace_job_data_object(jdata);
+        //prte_set_job_data_object(jdata);
 
         /* ensure the map object is present */
         if (NULL == jdata->map) {
@@ -697,10 +1207,33 @@ next:
                 jdata->map->num_nodes++;
                 PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
             }
-            /* add this proc to that node */
+            
+            /* add this proc to that node (IF NOT ALREADY PART OF THIS NODE!!) */
             PMIX_RETAIN(pptr);
-            pmix_pointer_array_add(pptr->node->procs, pptr);
-            pptr->node->num_procs++;
+            size_t pp;
+            prte_proc_t *node_proc;
+            bool found = false;
+            for(pp = 0; pp < pptr->node->procs->size; pp++){
+                if(NULL == (node_proc = prte_pointer_array_get_item(pptr->node->procs, pp))){
+                    continue;
+                }
+                
+                if(PMIX_CHECK_PROCID(&node_proc->name, &pptr->name)){
+                    found = true;
+
+                    //prte_pointer_array_set_item(pptr->node->procs, pp, NULL);
+                    //PRTE_RELEASE(node_proc);
+                    //prte_pointer_array_set_item(pptr->node->procs, pp, pptr);
+                }
+            }
+            if(!found){
+                prte_pointer_array_add(pptr->node->procs, pptr);
+                pptr->node->num_procs++;
+            }
+
+            //pmix_pointer_array_add(pptr->node->procs, pptr);
+            //pptr->node->num_procs++;
+
             /* and connect it back to its job object, if not already done */
             if (NULL == pptr->job) {
                 PMIX_RETAIN(jdata);
@@ -782,6 +1315,11 @@ next:
     if (NULL != info) {
         PMIX_INFO_FREE(info, ninfo);
     }
+
+    if(NULL != cur_daemon_timing_frame)
+        make_timestamp_base(&cur_daemon_timing_frame->rc_apply_end);
+
+
     return PRTE_SUCCESS;
 
 REPORT_ERROR:
