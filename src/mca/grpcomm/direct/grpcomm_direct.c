@@ -8,7 +8,7 @@
  * Copyright (c) 2014-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2014-2017 Research Organization for Information Science
  *                         and Technology (RIST). All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -22,18 +22,16 @@
 
 #include <string.h>
 
-#include "src/class/prte_list.h"
+#include "src/class/pmix_list.h"
 #include "src/pmix/pmix-internal.h"
 
 #include "src/mca/errmgr/errmgr.h"
-#include "src/mca/rml/base/base.h"
-#include "src/mca/rml/base/rml_contact.h"
-#include "src/mca/routed/base/base.h"
+#include "src/rml/rml.h"
 #include "src/mca/state/state.h"
 #include "src/util/name_fns.h"
 #include "src/util/nidmap.h"
 #include "src/util/proc_info.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "grpcomm_direct.h"
 #include "src/mca/grpcomm/base/base.h"
@@ -42,16 +40,20 @@
 static int init(void);
 static void finalize(void);
 static int xcast(pmix_rank_t *vpids, size_t nprocs, pmix_data_buffer_t *buf);
-static int allgather(prte_grpcomm_coll_t *coll, pmix_data_buffer_t *buf, int mode);
+static int allgather(prte_grpcomm_coll_t *coll,
+                     pmix_data_buffer_t *buf,
+                     int mode, pmix_status_t local_status);
 
 /* Module def */
-prte_grpcomm_base_module_t prte_grpcomm_direct_module = {.init = init,
-                                                         .finalize = finalize,
-                                                         .xcast = xcast,
-                                                         .allgather = allgather,
-                                                         .rbcast = NULL,
-                                                         .register_cb = NULL,
-                                                         .unregister_cb = NULL};
+prte_grpcomm_base_module_t prte_grpcomm_direct_module = {
+    .init = init,
+    .finalize = finalize,
+    .xcast = xcast,
+    .allgather = allgather,
+    .rbcast = NULL,
+    .register_cb = NULL,
+    .unregister_cb = NULL
+};
 
 /* internal functions */
 static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
@@ -62,23 +64,23 @@ static void barrier_release(int status, pmix_proc_t *sender, pmix_data_buffer_t 
                             prte_rml_tag_t tag, void *cbdata);
 
 /* internal variables */
-static prte_list_t tracker;
+static pmix_list_t tracker;
 
 /**
  * Initialize the module
  */
 static int init(void)
 {
-    PRTE_CONSTRUCT(&tracker, prte_list_t);
+    PMIX_CONSTRUCT(&tracker, pmix_list_t);
 
     /* post the receives */
-    prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_XCAST, PRTE_RML_PERSISTENT, xcast_recv,
-                            NULL);
-    prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_ALLGATHER_DIRECT, PRTE_RML_PERSISTENT,
-                            allgather_recv, NULL);
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_XCAST,
+                  PRTE_RML_PERSISTENT, xcast_recv, NULL);
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_ALLGATHER_DIRECT,
+                  PRTE_RML_PERSISTENT, allgather_recv, NULL);
     /* setup recv for barrier release */
-    prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_COLL_RELEASE, PRTE_RML_PERSISTENT,
-                            barrier_release, NULL);
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_COLL_RELEASE,
+                  PRTE_RML_PERSISTENT, barrier_release, NULL);
 
     return PRTE_SUCCESS;
 }
@@ -88,7 +90,7 @@ static int init(void)
  */
 static void finalize(void)
 {
-    PRTE_LIST_DESTRUCT(&tracker);
+    PMIX_LIST_DESTRUCT(&tracker);
     return;
 }
 
@@ -97,8 +99,8 @@ static int xcast(pmix_rank_t *vpids, size_t nprocs, pmix_data_buffer_t *buf)
     int rc;
 
     /* send it to the HNP (could be myself) for relay */
-    if (0 > (rc = prte_rml.send_buffer_nb(PRTE_PROC_MY_HNP, buf, PRTE_RML_TAG_XCAST,
-                                          prte_rml_send_callback, NULL))) {
+    PRTE_RML_SEND(rc, PRTE_PROC_MY_HNP->rank, buf, PRTE_RML_TAG_XCAST);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
         PMIX_DATA_BUFFER_RELEASE(buf);
         return rc;
@@ -106,13 +108,15 @@ static int xcast(pmix_rank_t *vpids, size_t nprocs, pmix_data_buffer_t *buf)
     return PRTE_SUCCESS;
 }
 
-static int allgather(prte_grpcomm_coll_t *coll, pmix_data_buffer_t *buf, int mode)
+static int allgather(prte_grpcomm_coll_t *coll, pmix_data_buffer_t *buf,
+                     int mode, pmix_status_t local_status)
 {
     int rc;
     pmix_data_buffer_t *relay;
 
     PRTE_OUTPUT_VERBOSE((1, prte_grpcomm_base_framework.framework_output,
-                         "%s grpcomm:direct: allgather", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
+                         "%s grpcomm:direct: allgather",
+                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
 
     /* the base functions pushed us into the event library
      * before calling us, so we can safely access global data
@@ -141,6 +145,14 @@ static int allgather(prte_grpcomm_coll_t *coll, pmix_data_buffer_t *buf, int mod
         return rc;
     }
 
+    /* pack the local_status */
+    rc = PMIx_Data_pack(NULL, relay, &local_status, 1, PMIX_STATUS);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        PMIX_DATA_BUFFER_RELEASE(relay);
+        return rc;
+    }
+
     /* pass along the payload */
     rc = PMIx_Data_copy_payload(relay, buf);
     if (PMIX_SUCCESS != rc) {
@@ -155,19 +167,21 @@ static int allgather(prte_grpcomm_coll_t *coll, pmix_data_buffer_t *buf, int mod
                          PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
 
     /* send the info to ourselves for tracking */
-    rc = prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, relay, PRTE_RML_TAG_ALLGATHER_DIRECT,
-                                 prte_rml_send_callback, NULL);
+    PRTE_RML_SEND(rc, PRTE_PROC_MY_NAME->rank, relay,
+                  PRTE_RML_TAG_ALLGATHER_DIRECT);
     return rc;
 }
 
-static void allgather_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
+static void allgather_recv(int status, pmix_proc_t *sender,
+                           pmix_data_buffer_t *buffer,
                            prte_rml_tag_t tag, void *cbdata)
 {
     int32_t cnt;
-    int rc, ret, mode;
+    int rc, mode;
     prte_grpcomm_signature_t sig;
     pmix_data_buffer_t *reply;
     prte_grpcomm_coll_t *coll;
+    pmix_status_t local_status;
 
     PRTE_OUTPUT_VERBOSE((1, prte_grpcomm_base_framework.framework_output,
                          "%s grpcomm:direct allgather recvd from %s",
@@ -202,6 +216,18 @@ static void allgather_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *
         PMIX_ERROR_LOG(rc);
         return;
     }
+
+    /* unpack their local status */
+    cnt = 1;
+    rc = PMIx_Data_unpack(NULL, buffer, &local_status, &cnt, PMIX_STATUS);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        return;
+    }
+    if (PMIX_SUCCESS != local_status) {
+        coll->status = local_status;
+    }
+
     /* increment nprocs reported for collective */
     coll->nreported++;
     /* capture any provided content */
@@ -239,10 +265,8 @@ static void allgather_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *
                 PMIX_PROC_FREE(sig.signature, sig.sz);
                 return;
             }
-            /* pack the status - success since the allgather completed. This
-             * would be an error if we timeout instead */
-            ret = PRTE_SUCCESS;
-            rc = PMIx_Data_pack(NULL, reply, &ret, 1, PMIX_INT32);
+            /* pack the status */
+            rc = PMIx_Data_pack(NULL, reply, &coll->status, 1, PMIX_INT32);
             if (PMIX_SUCCESS != rc) {
                 PMIX_ERROR_LOG(rc);
                 PMIX_DATA_BUFFER_RELEASE(reply);
@@ -310,6 +334,15 @@ static void allgather_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *
                 PMIX_PROC_FREE(sig.signature, sig.sz);
                 return;
             }
+            /* pack the local_status */
+            rc = PMIx_Data_pack(NULL, reply, &coll->status, 1, PMIX_STATUS);
+            if (PMIX_SUCCESS != rc) {
+                PMIX_ERROR_LOG(rc);
+                PMIX_DATA_BUFFER_RELEASE(reply);
+                PMIX_PROC_FREE(sig.signature, sig.sz);
+                return;
+            }
+
             /* transfer the collected bucket */
             rc = PMIx_Data_copy_payload(reply, &coll->bucket);
             if (PMIX_SUCCESS != rc) {
@@ -319,25 +352,31 @@ static void allgather_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *
                 return;
             }
             /* send the info to our parent */
-            rc = prte_rml.send_buffer_nb(PRTE_PROC_MY_PARENT, reply, PRTE_RML_TAG_ALLGATHER_DIRECT,
-                                         prte_rml_send_callback, NULL);
+            PRTE_RML_SEND(rc, PRTE_PROC_MY_PARENT->rank, reply,
+                          PRTE_RML_TAG_ALLGATHER_DIRECT);
+            if (PRTE_SUCCESS != rc) {
+                PRTE_ERROR_LOG(rc);
+                PMIX_DATA_BUFFER_RELEASE(reply);
+                PMIX_PROC_FREE(sig.signature, sig.sz);
+                return;
+            }
         }
     }
     PMIX_PROC_FREE(sig.signature, sig.sz);
 }
 
-static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
+static void xcast_recv(int status, pmix_proc_t *sender,
+                       pmix_data_buffer_t *buffer,
                        prte_rml_tag_t tg, void *cbdata)
 {
-    prte_list_item_t *item;
-    prte_namelist_t *nm;
+    prte_routed_tree_t *nm;
     int ret, cnt;
     pmix_data_buffer_t *relay = NULL, *rly, *rlycopy;
     pmix_data_buffer_t datbuf, *data;
     bool compressed;
     prte_job_t *jdata, *daemons;
     prte_proc_t *rec;
-    prte_list_t coll;
+    pmix_list_t coll;
     prte_grpcomm_signature_t sig;
     prte_rml_tag_t tag;
     pmix_byte_object_t bo, pbo;
@@ -359,7 +398,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
     }
     PMIX_DATA_BUFFER_CONSTRUCT(&datbuf);
     /* setup the relay list */
-    PRTE_CONSTRUCT(&coll, prte_list_t);
+    PMIX_CONSTRUCT(&coll, pmix_list_t);
 
     /* unpack the flag to see if this payload is compressed */
     cnt = 1;
@@ -368,7 +407,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         return;
     }
@@ -378,7 +417,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
     if (PMIX_SUCCESS != ret) {
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         return;
     }
@@ -392,17 +431,17 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
                 PMIX_BYTE_OBJECT_DESTRUCT(&pbo);
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
                 PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-                PRTE_DESTRUCT(&coll);
+                PMIX_DESTRUCT(&coll);
                 PMIX_DATA_BUFFER_RELEASE(rly);
                 return;
             }
         } else {
-            prte_show_help("help-prte-runtime.txt", "failed-to-uncompress",
+            pmix_show_help("help-prte-runtime.txt", "failed-to-uncompress",
                            true, prte_process_info.nodename);
             PMIX_BYTE_OBJECT_DESTRUCT(&pbo);
             PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
             PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-            PRTE_DESTRUCT(&coll);
+            PMIX_DESTRUCT(&coll);
             PMIX_DATA_BUFFER_RELEASE(rly);
             return;
         }
@@ -412,7 +451,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
             PMIX_BYTE_OBJECT_DESTRUCT(&pbo);
             PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
             PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-            PRTE_DESTRUCT(&coll);
+            PMIX_DESTRUCT(&coll);
             PMIX_DATA_BUFFER_RELEASE(rly);
             return;
         }
@@ -427,7 +466,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         return;
     }
@@ -438,7 +477,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         PMIX_PROC_FREE(sig.signature, sig.sz);
         return;
@@ -452,7 +491,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         return;
     }
@@ -464,7 +503,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
         PMIX_ERROR_LOG(ret);
         PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
         PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-        PRTE_DESTRUCT(&coll);
+        PMIX_DESTRUCT(&coll);
         PMIX_DATA_BUFFER_RELEASE(rly);
         PMIX_DATA_BUFFER_RELEASE(relay);
         return;
@@ -475,16 +514,7 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
             PRTE_ERROR_LOG(ret);
             PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
             PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-            PRTE_DESTRUCT(&coll);
-            PMIX_DATA_BUFFER_RELEASE(rly);
-            PMIX_DATA_BUFFER_RELEASE(relay);
-            return;
-        }
-        if (PRTE_SUCCESS != (ret = prte_util_parse_node_info(data))) {
-            PRTE_ERROR_LOG(ret);
-            PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-            PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-            PRTE_DESTRUCT(&coll);
+            PMIX_DESTRUCT(&coll);
             PMIX_DATA_BUFFER_RELEASE(rly);
             PMIX_DATA_BUFFER_RELEASE(relay);
             return;
@@ -500,108 +530,65 @@ static void xcast_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
                 PMIX_ERROR_LOG(ret);
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
                 PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-                PRTE_DESTRUCT(&coll);
+                PMIX_DESTRUCT(&coll);
                 PMIX_DATA_BUFFER_RELEASE(rly);
                 PMIX_DATA_BUFFER_RELEASE(relay);
                 return;
             }
 
-            /* store it locally */
-            ret = PMIx_Store_internal(&dmn, PMIX_PROC_URI, &val);
-            PMIX_VALUE_DESTRUCT(&val);
-            if (PMIX_SUCCESS != ret) {
-                PMIX_ERROR_LOG(ret);
-                PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-                PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
-                PRTE_DESTRUCT(&coll);
-                PMIX_DATA_BUFFER_RELEASE(rly);
-                PMIX_DATA_BUFFER_RELEASE(relay);
-                return;
+            if (!PMIX_CHECK_PROCID(&dmn, PRTE_PROC_MY_HNP) &&
+                !PMIX_CHECK_PROCID(&dmn, PRTE_PROC_MY_NAME) &&
+                !PMIX_CHECK_PROCID(&dmn, PRTE_PROC_MY_PARENT)) {
+                /* store it locally */
+                ret = PMIx_Store_internal(&dmn, PMIX_PROC_URI, &val);
+                PMIX_VALUE_DESTRUCT(&val);
+                if (PMIX_SUCCESS != ret) {
+                    PMIX_ERROR_LOG(ret);
+                    PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
+                    PMIX_DATA_BUFFER_DESTRUCT(&datbuf);
+                    PMIX_DESTRUCT(&coll);
+                    PMIX_DATA_BUFFER_RELEASE(rly);
+                    PMIX_DATA_BUFFER_RELEASE(relay);
+                    return;
+                }
             }
         }
         if (PMIX_ERR_UNPACK_READ_PAST_END_OF_BUFFER != ret) {
             PMIX_ERROR_LOG(ret);
         }
-        /* update the routing plan */
-        prte_routed.update_routing_plan();
     }
 
     daemons = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
     if (!prte_get_attribute(&daemons->attributes, PRTE_JOB_DO_NOT_LAUNCH, NULL, PMIX_BOOL)) {
-        /* get the list of next recipients from the routed module */
-        prte_routed.get_routing_list(&coll);
-
-        /* if list is empty, no relay is required */
-        if (prte_list_is_empty(&coll)) {
-            PRTE_OUTPUT_VERBOSE((5, prte_grpcomm_base_framework.framework_output,
-                                 "%s grpcomm:direct:send_relay - recipient list is empty!",
-                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
-            goto CLEANUP;
-        }
-
-        /* send the message to each recipient on list, deconstructing it as we go */
-        while (NULL != (item = prte_list_remove_first(&coll))) {
-            nm = (prte_namelist_t *) item;
-
+        /* send the message to each of our children */
+        PMIX_LIST_FOREACH(nm, &prte_rml_base.children, prte_routed_tree_t)
+        {
             PRTE_OUTPUT_VERBOSE((5, prte_grpcomm_base_framework.framework_output,
                                  "%s grpcomm:direct:send_relay sending relay msg of %d bytes to %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (int) rly->bytes_used,
-                                 PRTE_NAME_PRINT(&nm->name)));
-            /* check the state of the recipient - no point
-             * sending to someone not alive
-             */
-            jdata = prte_get_job_data_object(nm->name.nspace);
-            if (NULL
-                == (rec = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs,
-                                                                      nm->name.rank))) {
-                if (!prte_abnormal_term_ordered && !prte_prteds_term_ordered) {
-                    prte_output(0, "%s grpcomm:direct:send_relay proc %s not found - cannot relay",
-                                PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&nm->name));
-                }
-                PRTE_RELEASE(item);
-                PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-                continue;
-            }
-            if ((PRTE_PROC_STATE_RUNNING < rec->state && PRTE_PROC_STATE_CALLED_ABORT != rec->state)
-                || !PRTE_FLAG_TEST(rec, PRTE_PROC_FLAG_ALIVE)) {
-                if (!prte_abnormal_term_ordered && !prte_prteds_term_ordered) {
-                    prte_output(
-                        0, "%s grpcomm:direct:send_relay proc %s not running - cannot relay: %s ",
-                        PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&nm->name),
-                        PRTE_FLAG_TEST(rec, PRTE_PROC_FLAG_ALIVE)
-                            ? prte_proc_state_to_str(rec->state)
-                            : "NOT ALIVE");
-                }
-                PRTE_RELEASE(item);
-                PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-                continue;
-            }
+                                 PRTE_VPID_PRINT(nm->rank)));
             /* copy the buffer for send */
             PMIX_DATA_BUFFER_CREATE(rlycopy);
             ret = PMIx_Data_copy_payload(rlycopy, rly);
             if (PMIX_SUCCESS != ret) {
                 PRTE_ERROR_LOG(ret);
                 PMIX_DATA_BUFFER_RELEASE(rlycopy);
-                PRTE_RELEASE(item);
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
                 continue;
             }
-            if (PRTE_SUCCESS
-                != (ret = prte_rml.send_buffer_nb(&nm->name, rlycopy, PRTE_RML_TAG_XCAST,
-                                                  prte_rml_send_callback, NULL))) {
+            PRTE_RML_SEND(ret, nm->rank, rlycopy, PRTE_RML_TAG_XCAST);
+            if (PRTE_SUCCESS != ret) {
                 PRTE_ERROR_LOG(ret);
                 PMIX_DATA_BUFFER_RELEASE(rlycopy);
-                PRTE_RELEASE(item);
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
                 continue;
             }
-            PRTE_RELEASE(item);
         }
     }
 
 CLEANUP:
     /* cleanup */
-    PRTE_LIST_DESTRUCT(&coll);
+    PMIX_LIST_DESTRUCT(&coll);
     PMIX_DATA_BUFFER_RELEASE(rly); // retain accounting
 
     /* now pass the relay buffer to myself for processing IFF it
@@ -675,7 +662,7 @@ static void barrier_release(int status, pmix_proc_t *sender, pmix_data_buffer_t 
     if (NULL != coll->cbfunc) {
         coll->cbfunc(ret, buffer, coll->cbdata);
     }
-    prte_list_remove_item(&prte_grpcomm_base.ongoing, &coll->super);
-    PRTE_RELEASE(coll);
+    pmix_list_remove_item(&prte_grpcomm_base.ongoing, &coll->super);
+    PMIX_RELEASE(coll);
     PMIX_PROC_FREE(sig.signature, sig.sz);
 }

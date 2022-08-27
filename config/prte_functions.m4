@@ -18,6 +18,8 @@ dnl Copyright (c) 2017      Research Organization for Information Science
 dnl                         and Technology (RIST). All rights reserved.
 dnl
 dnl Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+dnl Copyright (c) 2022      Amazon.com, Inc. or its affiliates.
+dnl                         All Rights reserved.
 dnl $COPYRIGHT$
 dnl
 dnl Additional copyrights may follow
@@ -117,9 +119,6 @@ AC_DEFINE_UNQUOTED([PRTE_CONFIGURE_HOST], "$PRTE_CONFIGURE_HOST",
 AC_SUBST(PRTE_CONFIGURE_DATE)
 AC_DEFINE_UNQUOTED([PRTE_CONFIGURE_DATE], "$PRTE_CONFIGURE_DATE",
                    [Date when PMIx was built])
-
-PRTE_LIBNL_SANITY_INIT
-
 ])dnl
 
 dnl #######################################################################
@@ -338,98 +337,13 @@ dnl #######################################################################
 dnl #######################################################################
 dnl #######################################################################
 
-# Remove all duplicate -I, -L, and -l flags from the variable named $1
-AC_DEFUN([PRTE_FLAGS_UNIQ],[
-    # 1 is the variable name to be uniq-ized
-    prte_name=$1
-
-    # Go through each item in the variable and only keep the unique ones
-
-    prte_count=0
-    for val in ${$1}; do
-        prte_done=0
-        prte_i=1
-        prte_found=0
-
-        # Loop over every token we've seen so far
-
-        prte_done="`expr $prte_i \> $prte_count`"
-        while test "$prte_found" = "0" && test "$prte_done" = "0"; do
-
-            # Have we seen this token already?  Prefix the comparison
-            # with "x" so that "-Lfoo" values won't be cause an error.
-
-	    prte_eval="expr x$val = x\$prte_array_$prte_i"
-	    prte_found=`eval $prte_eval`
-
-            # Check the ending condition
-
-	    prte_done="`expr $prte_i \>= $prte_count`"
-
-            # Increment the counter
-
-	    prte_i="`expr $prte_i + 1`"
-        done
-
-        # Check for special cases where we do want to allow repeated
-        # arguments (per
-        # https://www.open-mpi.org/community/lists/devel/2012/08/11362.php
-        # and
-        # https://github.com/open-mpi/ompi/issues/324).
-
-        case $val in
-        -Xclang|-Xg)
-                prte_found=0
-                prte_i=`expr $prte_count + 1`
-                ;;
-        -framework)
-                prte_found=0
-                prte_i=`expr $prte_count + 1`
-                ;;
-        --param)
-                prte_found=0
-                prte_i=`expr $prte_count + 1`
-                ;;
-        esac
-
-        # If we didn't find the token, add it to the "array"
-
-        if test "$prte_found" = "0"; then
-	    prte_eval="prte_array_$prte_i=$val"
-	    eval $prte_eval
-	    prte_count="`expr $prte_count + 1`"
-        else
-	    prte_i="`expr $prte_i - 1`"
-        fi
-    done
-
-    # Take all the items in the "array" and assemble them back into a
-    # single variable
-
-    prte_i=1
-    prte_done="`expr $prte_i \> $prte_count`"
-    prte_newval=
-    while test "$prte_done" = "0"; do
-        prte_eval="prte_newval=\"$prte_newval \$prte_array_$prte_i\""
-        eval $prte_eval
-
-        prte_eval="unset prte_array_$prte_i"
-        eval $prte_eval
-
-        prte_done="`expr $prte_i \>= $prte_count`"
-        prte_i="`expr $prte_i + 1`"
-    done
-
-    # Done; do the assignment
-
-    prte_newval="`echo $prte_newval`"
-    prte_eval="$prte_name=\"$prte_newval\""
-    eval $prte_eval
-
-    # Clean up
-
-    unset prte_name prte_i prte_done prte_newval prte_eval prte_count
-])dnl
+# PRTE_APPEND(variable, new_argument)
+# ----------------------------------------
+# Append new_argument to variable, assuming a space separated list.
+#
+AC_DEFUN([PRTE_APPEND], [
+  AS_IF([test -z "${$1}"], [$1="$2"], [$1="${$1} $2"])
+])
 
 dnl #######################################################################
 dnl #######################################################################
@@ -451,11 +365,7 @@ for arg in $2; do
         fi
     done
     if test "$prte_found" = "0" ; then
-        if test -z "$$1"; then
-            $1="$arg"
-        else
-            $1="$$1 $arg"
-        fi
+        PRTE_APPEND([$1], [$arg])
     fi
 done
 unset prte_found
@@ -484,7 +394,36 @@ AC_DEFUN([PRTE_FLAGS_APPEND_UNIQ], [
                    AS_IF([test "x$val" = "x$arg"], [prte_append=0])
                done])
         AS_IF([test "$prte_append" = "1"],
-              [AS_IF([test -z "$$1"], [$1=$arg], [$1="$$1 $arg"])])
+              [PRTE_APPEND([$1], [$arg])])
+    done
+
+    PRTE_VAR_SCOPE_POP
+])
+
+dnl #######################################################################
+dnl #######################################################################
+dnl #######################################################################
+
+# PRTE_FLAGS_PREPEND_UNIQ(variable, new_argument)
+# ----------------------------------------------
+# Prepend new_argument to variable if:
+#
+# - the argument does not begin with -I, -L, or -l, or
+# - the argument begins with -I, -L, or -l, and it's not already in variable
+#
+# This macro assumes a space seperated list.
+AC_DEFUN([PRTE_FLAGS_PREPEND_UNIQ], [
+    PRTE_VAR_SCOPE_PUSH([prte_tmp prte_prepend])
+
+    for arg in $2; do
+        prte_tmp=`echo $arg | cut -c1-2`
+        prte_prepend=1
+        AS_IF([test "$prte_tmp" = "-I" || test "$prte_tmp" = "-L" || test "$prte_tmp" = "-l"],
+              [for val in ${$1}; do
+                   AS_IF([test "x$val" = "x$arg"], [prte_prepend=0])
+               done])
+        AS_IF([test "$prte_prepend" = "1"],
+              [PRTE_APPEND([$1], [$arg])])
     done
 
     PRTE_VAR_SCOPE_POP

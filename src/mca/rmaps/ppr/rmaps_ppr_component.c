@@ -6,7 +6,7 @@
  * Copyright (c) 2019      Intel, Inc.  All rights reserved.
  * Copyright (c) 2019      Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -19,7 +19,7 @@
 
 #include "src/mca/base/base.h"
 
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "rmaps_ppr.h"
 #include "src/mca/rmaps/base/base.h"
@@ -35,11 +35,13 @@ static int prte_rmaps_ppr_register(void);
 
 prte_rmaps_base_component_t prte_rmaps_ppr_component = {
     .base_version = {
-        PRTE_RMAPS_BASE_VERSION_2_0_0,
+        PRTE_RMAPS_BASE_VERSION_4_0_0,
 
         .mca_component_name = "ppr",
-        PRTE_MCA_BASE_MAKE_VERSION(component, PRTE_MAJOR_VERSION, PRTE_MINOR_VERSION,
-                                    PRTE_RELEASE_VERSION),
+        PRTE_MCA_BASE_MAKE_VERSION(component,
+                                   PRTE_MAJOR_VERSION,
+                                   PRTE_MINOR_VERSION,
+                                   PMIX_RELEASE_VERSION),
         .mca_open_component = prte_rmaps_ppr_open,
         .mca_close_component = prte_rmaps_ppr_close,
         .mca_query_component = prte_rmaps_ppr_query,

@@ -15,7 +15,7 @@
  * Copyright (c) 2018      Research Organization for Information Science
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -30,10 +30,9 @@
 #include "constants.h"
 #include "types.h"
 
-#include "src/class/prte_list.h"
+#include "src/class/pmix_list.h"
 #include "src/mca/base/base.h"
 #include "src/mca/mca.h"
-#include "src/mca/prteif/prteif.h"
 #include "src/pmix/pmix-internal.h"
 
 #include "src/mca/errmgr/errmgr.h"
@@ -42,65 +41,54 @@
 #include "src/runtime/prte_globals.h"
 #include "src/runtime/prte_quit.h"
 #include "src/runtime/prte_wait.h"
-#include "src/threads/threads.h"
-#include "src/util/argv.h"
+#include "src/threads/pmix_threads.h"
+#include "src/util/pmix_argv.h"
 #include "src/util/dash_host/dash_host.h"
 #include "src/util/error_strings.h"
 #include "src/util/hostfile/hostfile.h"
 #include "src/util/name_fns.h"
-#include "src/util/net.h"
+#include "src/util/pmix_net.h"
 #include "src/util/output.h"
-#include "src/util/printf.h"
+#include "src/util/pmix_printf.h"
 #include "src/util/proc_info.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/mca/ras/base/ras_private.h"
 
 char *prte_ras_base_flag_string(prte_node_t *node)
 {
-    char *tmp, *t2;
+    char *tmp, *t3, **t2 = NULL;
 
     if (0 == node->flags) {
-        tmp = strdup("flags: NONE");
+        tmp = strdup("Flags: NONE");
         return tmp;
     }
 
-    tmp = strdup("flags: ");
     if (PRTE_FLAG_TEST(node, PRTE_NODE_FLAG_DAEMON_LAUNCHED)) {
-        prte_asprintf(&t2, "%sDAEMON_LAUNCHED:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "DAEMON_LAUNCHED");
     }
     if (PRTE_FLAG_TEST(node, PRTE_NODE_FLAG_LOC_VERIFIED)) {
-        prte_asprintf(&t2, "%sLOCATION_VERIFIED:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "LOCATION_VERIFIED");
     }
     if (PRTE_FLAG_TEST(node, PRTE_NODE_FLAG_OVERSUBSCRIBED)) {
-        prte_asprintf(&t2, "%sOVERSUBSCRIBED:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "OVERSUBSCRIBED");
     }
     if (PRTE_FLAG_TEST(node, PRTE_NODE_FLAG_MAPPED)) {
-        prte_asprintf(&t2, "%sMAPPED:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "MAPPED");
     }
     if (PRTE_FLAG_TEST(node, PRTE_NODE_FLAG_SLOTS_GIVEN)) {
-        prte_asprintf(&t2, "%sSLOTS_GIVEN:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "SLOTS_GIVEN");
     }
     if (PRTE_FLAG_TEST(node, PRTE_NODE_NON_USABLE)) {
-        prte_asprintf(&t2, "%sNONUSABLE:", tmp);
-        free(tmp);
-        tmp = t2;
+        pmix_argv_append_nosize(&t2, "NONUSABLE");
     }
-    if (':' == tmp[strlen(tmp) - 1]) {
-        tmp[strlen(tmp) - 1] = '\0';
+    if (NULL != t2) {
+        t3 = pmix_argv_join(t2, ':');
+        pmix_asprintf(&tmp, "Flags: %s", t3);
+        free(t3);
+        pmix_argv_free(t2);
     } else {
-        free(tmp);
-        tmp = strdup("flags: NONE");
+        tmp = strdup("Flags: NONE");
     }
     return tmp;
 }
@@ -114,9 +102,9 @@ void prte_ras_base_display_alloc(prte_job_t *jdata)
     char *flgs, *aliases;
 
     if (prte_get_attribute(&jdata->attributes, PRTE_JOB_XML_OUTPUT, NULL, PMIX_BOOL)) {
-        prte_asprintf(&tmp, "<allocation>\n");
+        pmix_asprintf(&tmp, "<allocation>\n");
     } else {
-        prte_asprintf(&tmp,
+        pmix_asprintf(&tmp,
                       "\n======================   ALLOCATED NODES   ======================\n");
     }
     if (prte_hnp_is_allocated) {
@@ -125,12 +113,12 @@ void prte_ras_base_display_alloc(prte_job_t *jdata)
         istart = 1;
     }
     for (i = istart; i < prte_node_pool->size; i++) {
-        if (NULL == (alloc = (prte_node_t *) prte_pointer_array_get_item(prte_node_pool, i))) {
+        if (NULL == (alloc = (prte_node_t *) pmix_pointer_array_get_item(prte_node_pool, i))) {
             continue;
         }
         if (prte_get_attribute(&jdata->attributes, PRTE_JOB_XML_OUTPUT, NULL, PMIX_BOOL)) {
             /* need to create the output in XML format */
-            prte_asprintf(&tmp2,
+            pmix_asprintf(&tmp2,
                           "\t<host name=\"%s\" slots=\"%d\" max_slots=\"%d\" slots_inuse=\"%d\">\n",
                           (NULL == alloc->name) ? "UNKNOWN" : alloc->name, (int) alloc->slots,
                           (int) alloc->slots_max, (int) alloc->slots_inuse);
@@ -139,11 +127,11 @@ void prte_ras_base_display_alloc(prte_job_t *jdata)
             flgs = prte_ras_base_flag_string(alloc);
             /* build the aliases string */
             if (NULL != alloc->aliases) {
-                aliases = prte_argv_join(alloc->aliases, ',');
+                aliases = pmix_argv_join(alloc->aliases, ',');
             } else {
                 aliases = NULL;
             }
-            prte_asprintf(&tmp2, "    %s: slots=%d max_slots=%d slots_inuse=%d state=%s\n\t%s\n\taliases: %s\n",
+            pmix_asprintf(&tmp2, "    %s: slots=%d max_slots=%d slots_inuse=%d state=%s\n\t%s\n\taliases: %s\n",
                           (NULL == alloc->name) ? "UNKNOWN" : alloc->name, (int) alloc->slots,
                           (int) alloc->slots_max, (int) alloc->slots_inuse,
                           prte_node_state_to_str(alloc->state), flgs,
@@ -156,7 +144,7 @@ void prte_ras_base_display_alloc(prte_job_t *jdata)
         if (NULL == tmp) {
             tmp = tmp2;
         } else {
-            prte_asprintf(&tmp3, "%s%s", tmp, tmp2);
+            pmix_asprintf(&tmp3, "%s%s", tmp, tmp2);
             free(tmp);
             free(tmp2);
             tmp = tmp3;
@@ -179,16 +167,17 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
 {
     int rc;
     prte_job_t *jdata;
-    prte_list_t nodes;
+    pmix_list_t nodes;
     prte_node_t *node;
-    int32_t i;
+    int32_t i, j;
     prte_app_context_t *app;
     prte_state_caddy_t *caddy = (prte_state_caddy_t *) cbdata;
-    char *hosts = NULL;
+    char *hosts = NULL, **hostlist;
     char *ptr;
     pmix_status_t ret;
+    PRTE_HIDE_UNUSED_PARAMS(fd, args);
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PMIX_ACQUIRE_OBJECT(caddy);
 
     PRTE_OUTPUT_VERBOSE((5, prte_ras_base_framework.framework_output, "%s ras:base:allocate",
                          PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
@@ -222,7 +211,7 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
      */
 
     /* construct a list to hold the results */
-    PRTE_CONSTRUCT(&nodes, prte_list_t);
+    PMIX_CONSTRUCT(&nodes, pmix_list_t);
 
     /* if a component was selected, then we know we are in a managed
      * environment.  - the active module will return a list of what it found
@@ -232,8 +221,8 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
         if (PRTE_SUCCESS != (rc = prte_ras_base.active_module->allocate(jdata, &nodes))) {
             if (PRTE_ERR_ALLOCATION_PENDING == rc) {
                 /* an allocation request is underway, so just do nothing */
-                PRTE_DESTRUCT(&nodes);
-                PRTE_RELEASE(caddy);
+                PMIX_DESTRUCT(&nodes);
+                PMIX_RELEASE(caddy);
                 return;
             }
             if (PRTE_ERR_SYSTEM_WILL_BOOTSTRAP == rc) {
@@ -251,10 +240,10 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
                  */
                 if (prte_allocation_required) {
                     /* an allocation is required, so this is fatal */
-                    PRTE_DESTRUCT(&nodes);
-                    prte_show_help("help-ras-base.txt", "ras-base:no-allocation", true);
+                    PMIX_DESTRUCT(&nodes);
+                    pmix_show_help("help-ras-base.txt", "ras-base:no-allocation", true);
                     PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-                    PRTE_RELEASE(caddy);
+                    PMIX_RELEASE(caddy);
                     return;
                 } else {
                     /* an allocation is not required, so we can just
@@ -264,31 +253,32 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
                 }
             }
             PRTE_ERROR_LOG(rc);
-            PRTE_DESTRUCT(&nodes);
+            PMIX_DESTRUCT(&nodes);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
     }
     /* If something came back, save it and we are done */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* flag that the allocation is managed */
         prte_managed_allocation = true;
         /* since this is a managed allocation, we do not resolve */
         prte_do_not_resolve = true;
         /* if we are not retaining FQDN hostnames, then record
          * aliases where appropriate */
-        PRTE_LIST_FOREACH(node, &nodes, prte_node_t) {
-            if (!prte_net_isaddr(node->name) &&
+        PMIX_LIST_FOREACH(node, &nodes, prte_node_t) {
+            if (!pmix_net_isaddr(node->name) &&
                 NULL != (ptr = strchr(node->name, '.'))) {
+                node->rawname = strdup(node->name);
                 if (prte_keep_fqdn_hostnames) {
                     /* retain the non-fqdn name as an alias */
                     *ptr = '\0';
-                    prte_argv_append_unique_nosize(&node->aliases, node->name);
+                    pmix_argv_append_unique_nosize(&node->aliases, node->name);
                     *ptr = '.';
                 } else {
                     /* add the fqdn name as an alias */
-                    prte_argv_append_unique_nosize(&node->aliases, node->name);
+                    pmix_argv_append_unique_nosize(&node->aliases, node->name);
                     /* retain the non-fqdn name as the node's name */
                     *ptr = '\0';
                 }
@@ -299,21 +289,21 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
          */
         if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
             PRTE_ERROR_LOG(rc);
-            PRTE_DESTRUCT(&nodes);
+            PMIX_DESTRUCT(&nodes);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         goto DISPLAY;
     } else if (prte_allocation_required) {
         /* if nothing was found, and an allocation is
          * required, then error out
          */
-        PRTE_DESTRUCT(&nodes);
-        prte_show_help("help-ras-base.txt", "ras-base:no-allocation", true);
+        PMIX_DESTRUCT(&nodes);
+        pmix_show_help("help-ras-base.txt", "ras-base:no-allocation", true);
         PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-        PRTE_RELEASE(caddy);
+        PMIX_RELEASE(caddy);
         return;
     }
 
@@ -331,9 +321,9 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
 
         /* a rank/seqfile was provided - parse it */
         if (PRTE_SUCCESS != (rc = prte_util_add_hostfile_nodes(&nodes, hosts))) {
-            PRTE_DESTRUCT(&nodes);
+            PMIX_DESTRUCT(&nodes);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             free(hosts);
             return;
         }
@@ -343,14 +333,14 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
     /* if something was found in the rankfile, we use that as our global
      * pool - set it and we are done
      */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* store the results in the global resource pool - this removes the
          * list items
          */
         if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
             PRTE_ERROR_LOG(rc);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
         /* Record that the rankfile mapping policy has been selected */
@@ -361,7 +351,7 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
             PRTE_SET_MAPPING_DIRECTIVE(prte_rmaps_base.mapping, PRTE_MAPPING_NO_OVERSUBSCRIBE);
         }
         /* cleanup */
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         goto DISPLAY;
     }
 
@@ -369,19 +359,18 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
      * app_contexts. Any hosts the user wants to add via comm_spawn
      * can be done so using the add_host option */
     for (i = 0; i < jdata->apps->size; i++) {
-        if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, i))) {
+        if (NULL == (app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, i))) {
             continue;
         }
-        if (prte_get_attribute(&app->attributes, PRTE_APP_DASH_HOST, (void **) &hosts,
-                               PMIX_STRING)) {
+        if (prte_get_attribute(&app->attributes, PRTE_APP_DASH_HOST, (void **) &hosts, PMIX_STRING)) {
             PRTE_OUTPUT_VERBOSE((5, prte_ras_base_framework.framework_output,
                                  "%s ras:base:allocate adding dash_hosts",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
             if (PRTE_SUCCESS != (rc = prte_util_add_dash_host_nodes(&nodes, hosts, true))) {
                 free(hosts);
-                PRTE_DESTRUCT(&nodes);
+                PMIX_DESTRUCT(&nodes);
                 PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-                PRTE_RELEASE(caddy);
+                PMIX_RELEASE(caddy);
                 return;
             }
             free(hosts);
@@ -391,18 +380,18 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
     /* if something was found in the dash-host(s), we use that as our global
      * pool - set it and we are done
      */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* store the results in the global resource pool - this removes the
          * list items
          */
         if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
             PRTE_ERROR_LOG(rc);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
         /* cleanup */
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         goto DISPLAY;
     }
 
@@ -422,43 +411,46 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
      * can be present
      */
     for (i = 0; i < jdata->apps->size; i++) {
-        if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, i))) {
+        if (NULL == (app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, i))) {
             continue;
         }
-        if (prte_get_attribute(&app->attributes, PRTE_APP_HOSTFILE, (void **) &hosts,
-                               PMIX_STRING)) {
+        if (prte_get_attribute(&app->attributes, PRTE_APP_HOSTFILE, (void **) &hosts, PMIX_STRING)) {
             PRTE_OUTPUT_VERBOSE((5, prte_ras_base_framework.framework_output,
                                  "%s ras:base:allocate adding hostfile %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), hosts));
 
             /* hostfile was specified - parse it and add it to the list */
-            if (PRTE_SUCCESS != (rc = prte_util_add_hostfile_nodes(&nodes, hosts))) {
-                free(hosts);
-                PRTE_DESTRUCT(&nodes);
-                /* set an error event */
-                PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-                PRTE_RELEASE(caddy);
-                return;
-            }
+            hostlist = pmix_argv_split(hosts, ',');
             free(hosts);
+            for (j=0; NULL != hostlist[j]; j++) {
+                if (PRTE_SUCCESS != (rc = prte_util_add_hostfile_nodes(&nodes, hostlist[j]))) {
+                    pmix_argv_free(hostlist);
+                    PMIX_DESTRUCT(&nodes);
+                    /* set an error event */
+                    PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
+                    PMIX_RELEASE(caddy);
+                    return;
+                }
+            }
+            pmix_argv_free(hostlist);
         }
     }
 
     /* if something was found in the hostfiles(s), we use that as our global
      * pool - set it and we are done
      */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* store the results in the global resource pool - this removes the
          * list items
          */
         if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
             PRTE_ERROR_LOG(rc);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
         /* cleanup */
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         goto DISPLAY;
     }
 
@@ -470,9 +462,9 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
 
         /* a default hostfile was provided - parse it */
         if (PRTE_SUCCESS != (rc = prte_util_add_hostfile_nodes(&nodes, prte_default_hostfile))) {
-            PRTE_DESTRUCT(&nodes);
+            PMIX_DESTRUCT(&nodes);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
     }
@@ -480,18 +472,18 @@ void prte_ras_base_allocate(int fd, short args, void *cbdata)
     /* if something was found in the default hostfile, we use that as our global
      * pool - set it and we are done
      */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* store the results in the global resource pool - this removes the
          * list items
          */
         if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
             PRTE_ERROR_LOG(rc);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             return;
         }
         /* cleanup */
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         goto DISPLAY;
     }
 
@@ -503,12 +495,12 @@ addlocal:
     /* if nothing was found by any of the above methods, then we have no
      * earthly idea what to do - so just add the local host
      */
-    node = PRTE_NEW(prte_node_t);
+    node = PMIX_NEW(prte_node_t);
     if (NULL == node) {
         PRTE_ERROR_LOG(PRTE_ERR_OUT_OF_RESOURCE);
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-        PRTE_RELEASE(caddy);
+        PMIX_RELEASE(caddy);
         return;
     }
     /* use the same name we got in prte_process_info so we avoid confusion in
@@ -519,7 +511,7 @@ addlocal:
     node->slots_inuse = 0;
     node->slots_max = 0;
     node->slots = 1;
-    prte_list_append(&nodes, &node->super);
+    pmix_list_append(&nodes, &node->super);
     /* mark the HNP as "allocated" since we have nothing else to use */
     prte_hnp_is_allocated = true;
 
@@ -528,12 +520,12 @@ addlocal:
      */
     if (PRTE_SUCCESS != (rc = prte_ras_base_node_insert(&nodes, jdata))) {
         PRTE_ERROR_LOG(rc);
-        PRTE_DESTRUCT(&nodes);
+        PMIX_DESTRUCT(&nodes);
         PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-        PRTE_RELEASE(caddy);
+        PMIX_RELEASE(caddy);
         return;
     }
-    PRTE_DESTRUCT(&nodes);
+    PMIX_DESTRUCT(&nodes);
 
 DISPLAY:
     /* shall we display the results? */
@@ -552,7 +544,7 @@ next_state:
         if (PMIX_SUCCESS != ret && PMIX_OPERATION_SUCCEEDED != ret) {
             PMIX_ERROR_LOG(ret);
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOC_FAILED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
         }
         PMIX_INFO_DESTRUCT(&info);
     }
@@ -560,24 +552,44 @@ next_state:
     /* set total slots alloc */
     jdata->total_slots_alloc = prte_ras_base.total_slots_alloc;
 
+    if (prte_get_attribute(&jdata->attributes, PRTE_JOB_DISPLAY_TOPO, (void**)&hosts, PMIX_STRING)) {
+        hostlist = pmix_argv_split(hosts, ',');
+        free(hosts);
+        for (j=0; NULL != hostlist[j]; j++) {
+            node = prte_node_match(NULL, hostlist[j]);
+            if (NULL == node) {
+                continue;
+            }
+            prte_output(prte_clean_output,
+                        "=================================================================\n");
+            prte_output(prte_clean_output, "TOPOLOGY FOR NODE %s", node->name);
+            prte_hwloc_print(&ptr, NULL, node->topology->topo);
+            prte_output(prte_clean_output, ptr);
+            free(ptr);
+            prte_output(prte_clean_output,
+                        "=================================================================\n");
+        }
+        pmix_argv_free(hostlist);
+    }
+
     /* set the job state to the next position */
     PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ALLOCATION_COMPLETE);
 
     /* cleanup */
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 int prte_ras_base_add_hosts(prte_job_t *jdata)
 {
     int rc;
-    prte_list_t nodes;
+    pmix_list_t nodes;
     int i, n;
     prte_app_context_t *app;
     prte_node_t *node, *next, *nptr;
     char *hosts;
 
     /* construct a list to hold the results */
-    PRTE_CONSTRUCT(&nodes, prte_list_t);
+    PMIX_CONSTRUCT(&nodes, pmix_list_t);
 
     /* Individual add-hostfile names, if given, are included
      * in the app_contexts for this job. We therefore need to
@@ -593,7 +605,7 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
      */
 
     for (i = 0; i < jdata->apps->size; i++) {
-        if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, i))) {
+        if (NULL == (app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, i))) {
             continue;
         }
         if (prte_get_attribute(&app->attributes, PRTE_APP_ADD_HOSTFILE, (void **) &hosts,
@@ -605,7 +617,7 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
             /* hostfile was specified - parse it and add it to the list */
             if (PRTE_SUCCESS != (rc = prte_util_add_hostfile_nodes(&nodes, hosts))) {
                 PRTE_ERROR_LOG(rc);
-                PRTE_DESTRUCT(&nodes);
+                PMIX_DESTRUCT(&nodes);
                 free(hosts);
                 return rc;
             }
@@ -627,7 +639,7 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
      * can be present
      */
     for (i = 0; i < jdata->apps->size; i++) {
-        if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, i))) {
+        if (NULL == (app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, i))) {
             continue;
         }
         if (prte_get_attribute(&app->attributes, PRTE_APP_ADD_HOST, (void **) &hosts,
@@ -637,7 +649,7 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), hosts);
             if (PRTE_SUCCESS != (rc = prte_util_add_dash_host_nodes(&nodes, hosts, true))) {
                 PRTE_ERROR_LOG(rc);
-                PRTE_DESTRUCT(&nodes);
+                PMIX_DESTRUCT(&nodes);
                 free(hosts);
                 return rc;
             }
@@ -650,26 +662,26 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
     }
 
     /* if something was found, we add that to our global pool */
-    if (!prte_list_is_empty(&nodes)) {
+    if (!pmix_list_is_empty(&nodes)) {
         /* the node insert code doesn't check for uniqueness, so we will
          * do so here - yes, this is an ugly, non-scalable loop, but this
          * is the exception case and so we can do it here */
-        PRTE_LIST_FOREACH_SAFE(node, next, &nodes, prte_node_t)
+        PMIX_LIST_FOREACH_SAFE(node, next, &nodes, prte_node_t)
         {
             node->state = PRTE_NODE_STATE_ADDED;
             for (n = 0; n < prte_node_pool->size; n++) {
                 if (NULL
-                    == (nptr = (prte_node_t *) prte_pointer_array_get_item(prte_node_pool, n))) {
+                    == (nptr = (prte_node_t *) pmix_pointer_array_get_item(prte_node_pool, n))) {
                     continue;
                 }
                 if (0 == strcmp(node->name, nptr->name)) {
-                    prte_list_remove_item(&nodes, &node->super);
-                    PRTE_RELEASE(node);
+                    pmix_list_remove_item(&nodes, &node->super);
+                    PMIX_RELEASE(node);
                     break;
                 }
             }
         }
-        if (!prte_list_is_empty(&nodes)) {
+        if (!pmix_list_is_empty(&nodes)) {
             /* store the results in the global resource pool - this removes the
              * list items
              */
@@ -681,7 +693,7 @@ int prte_ras_base_add_hosts(prte_job_t *jdata)
         }
     }
     /* cleanup */
-    PRTE_LIST_DESTRUCT(&nodes);
+    PMIX_LIST_DESTRUCT(&nodes);
 
     /* shall we display the results? */
     if (0 < prte_output_get_verbosity(prte_ras_base_framework.framework_output)) {

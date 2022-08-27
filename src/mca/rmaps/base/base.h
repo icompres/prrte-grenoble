@@ -13,7 +13,7 @@
  * Copyright (c) 2011-2013 Los Alamos National Security, LLC.
  *                         All rights reserved.
  * Copyright (c) 2014-2020 Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -33,11 +33,12 @@
 #include "prte_config.h"
 #include "types.h"
 
-#include "src/class/prte_list.h"
+#include "src/class/pmix_list.h"
 #include "src/mca/mca.h"
-#include "src/util/printf.h"
-
 #include "src/mca/base/prte_mca_base_framework.h"
+#include "src/mca/schizo/schizo.h"
+#include "src/util/pmix_printf.h"
+
 #include "src/runtime/prte_globals.h"
 
 #include "src/mca/rmaps/rmaps.h"
@@ -60,7 +61,7 @@ PRTE_EXPORT int prte_rmaps_base_select(void);
  */
 typedef struct {
     /* list of selected modules */
-    prte_list_t selected_modules;
+    pmix_list_t selected_modules;
     /* default mapping/ranking directives */
     prte_mapping_policy_t mapping;
     prte_ranking_policy_t ranking;
@@ -74,6 +75,8 @@ typedef struct {
     /* default file for use in sequential and rankfile mapping
      * when the directive comes thru MCA param */
     char *file;
+    hwloc_cpuset_t available, baseset;  // scratch for binding calculation
+    bool abort_non_zero_exit;  // default setting for aborting on non-zero proc exit
 } prte_rmaps_base_t;
 
 /**
@@ -85,18 +88,17 @@ PRTE_EXPORT extern prte_rmaps_base_t prte_rmaps_base;
  * Select an rmaps component / module
  */
 typedef struct {
-    prte_list_item_t super;
+    pmix_list_item_t super;
     int pri;
     prte_rmaps_base_module_t *module;
     prte_mca_base_component_t *component;
 } prte_rmaps_base_selected_module_t;
-PRTE_CLASS_DECLARATION(prte_rmaps_base_selected_module_t);
+PMIX_CLASS_DECLARATION(prte_rmaps_base_selected_module_t);
 
 /*
  * Map a job
  */
 PRTE_EXPORT void prte_rmaps_base_map_job(int sd, short args, void *cbdata);
-PRTE_EXPORT int prte_rmaps_base_assign_locations(prte_job_t *jdata);
 
 /**
  * Utility routines to get/set vpid mapping for the job
@@ -113,13 +115,48 @@ PRTE_EXPORT char *prte_rmaps_base_print_ranking(prte_ranking_policy_t ranking);
 
 PRTE_EXPORT int prte_rmaps_base_prep_topology(hwloc_topology_t topo);
 
-PRTE_EXPORT int prte_rmaps_base_filter_nodes(prte_app_context_t *app, prte_list_t *nodes,
+PRTE_EXPORT int prte_rmaps_base_filter_nodes(prte_app_context_t *app, pmix_list_t *nodes,
                                              bool remove);
 
+PRTE_EXPORT int prte_rmaps_base_set_default_mapping(prte_job_t *jdata,
+                                                    prte_rmaps_options_t *options);
 PRTE_EXPORT int prte_rmaps_base_set_mapping_policy(prte_job_t *jdata, char *spec);
+
+PRTE_EXPORT int prte_rmaps_base_set_default_ranking(prte_job_t *jdata,
+                                                    prte_rmaps_options_t *options);
 PRTE_EXPORT int prte_rmaps_base_set_ranking_policy(prte_job_t *jdata, char *spec);
 
+PRTE_EXPORT int prte_rmaps_base_set_default_rto(prte_job_t *jdata,
+                                                prte_rmaps_options_t *options);
+PRTE_EXPORT int prte_rmaps_base_set_runtime_options(prte_job_t *jdata, char *spec);
+
 PRTE_EXPORT void prte_rmaps_base_display_map(prte_job_t *jdata);
+PRTE_EXPORT void prte_rmaps_base_report_bindings(prte_job_t *jdata,
+                                                 prte_rmaps_options_t *options);
+
+PRTE_EXPORT int prte_rmaps_base_get_ncpus(prte_node_t *node,
+                                          hwloc_obj_t obj,
+                                          prte_rmaps_options_t *options);
+
+PRTE_EXPORT bool prte_rmaps_base_check_avail(prte_job_t *jdata,
+                                             prte_app_context_t *app,
+                                             prte_node_t *node,
+                                             pmix_list_t *node_list,
+                                             hwloc_obj_t obj,
+                                             prte_rmaps_options_t *options);
+
+PRTE_EXPORT int prte_rmaps_base_check_oversubscribed(prte_job_t *jdata,
+                                                     prte_app_context_t *app,
+                                                     prte_node_t *node,
+                                                     prte_rmaps_options_t *options);
+
+PRTE_EXPORT void prte_rmaps_base_get_cpuset(prte_job_t *jdata,
+                                            prte_node_t *node,
+                                            prte_rmaps_options_t *options);
+
+PRTE_EXPORT int prte_rmaps_base_check_support(prte_job_t *jdata,
+                                              prte_node_t *node,
+                                              prte_rmaps_options_t *options);
 
 END_C_DECLS
 

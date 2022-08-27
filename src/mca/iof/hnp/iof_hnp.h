@@ -13,7 +13,7 @@
  * Copyright (c) 2016-2019 Intel, Inc.  All rights reserved.
  * Copyright (c) 2019      Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -63,8 +63,7 @@ BEGIN_C_DECLS
  */
 struct prte_iof_hnp_component_t {
     prte_iof_base_component_t super;
-    prte_list_t procs;
-    prte_iof_read_event_t *stdinev;
+    pmix_list_t procs;
     prte_event_t stdinsig;
 };
 typedef struct prte_iof_hnp_component_t prte_iof_hnp_component_t;
@@ -79,7 +78,9 @@ void prte_iof_hnp_read_local_handler(int fd, short event, void *cbdata);
 void prte_iof_hnp_stdin_cb(int fd, short event, void *cbdata);
 bool prte_iof_hnp_stdin_check(int fd);
 
-int prte_iof_hnp_send_data_to_endpoint(pmix_proc_t *host, pmix_proc_t *target, prte_iof_tag_t tag,
+int prte_iof_hnp_send_data_to_endpoint(const pmix_proc_t *host,
+                                       const pmix_proc_t *target,
+                                       prte_iof_tag_t tag,
                                        unsigned char *data, int numbytes);
 
 END_C_DECLS

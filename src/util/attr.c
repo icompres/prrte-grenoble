@@ -3,7 +3,7 @@
  * Copyright (c) 2014-2017 Research Organization for Information Science
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2018-2020 Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * Copyright (c) 2021      The University of Tennessee and The University
  *                         of Tennessee Research Foundation.  All rights
  *                         reserved.
@@ -18,10 +18,10 @@
 #include "constants.h"
 #include "types.h"
 
-#include "src/util/argv.h"
+#include "src/util/pmix_argv.h"
 #include "src/util/output.h"
-#include "src/util/printf.h"
-#include "src/util/string_copy.h"
+#include "src/util/pmix_printf.h"
+#include "src/util/pmix_string_copy.h"
 
 #include "src/mca/errmgr/errmgr.h"
 
@@ -41,17 +41,18 @@ typedef struct {
 /* all default to NULL */
 static prte_attr_converter_t converters[MAX_CONVERTERS];
 
-bool prte_get_attribute(prte_list_t *attributes, prte_attribute_key_t key, void **data,
+bool prte_get_attribute(pmix_list_t *attributes, prte_attribute_key_t key, void **data,
                         pmix_data_type_t type)
 {
     prte_attribute_t *kv;
     int rc;
 
-    PRTE_LIST_FOREACH(kv, attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, attributes, prte_attribute_t)
     {
         if (key == kv->key) {
             if (kv->data.type != type) {
                 PRTE_ERROR_LOG(PRTE_ERR_TYPE_MISMATCH);
+                prte_output(0, "KV %s TYPE %s", PMIx_Data_type_string(kv->data.type), PMIx_Data_type_string(type));
                 return false;
             }
             if (NULL != data) {
@@ -66,13 +67,13 @@ bool prte_get_attribute(prte_list_t *attributes, prte_attribute_key_t key, void 
     return false;
 }
 
-int prte_set_attribute(prte_list_t *attributes, prte_attribute_key_t key, bool local, void *data,
+int prte_set_attribute(pmix_list_t *attributes, prte_attribute_key_t key, bool local, void *data,
                        pmix_data_type_t type)
 {
     prte_attribute_t *kv;
     int rc;
 
-    PRTE_LIST_FOREACH(kv, attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, attributes, prte_attribute_t)
     {
         if (key == kv->key) {
             if (kv->data.type != type) {
@@ -85,18 +86,18 @@ int prte_set_attribute(prte_list_t *attributes, prte_attribute_key_t key, bool l
         }
     }
     /* not found - add it */
-    kv = PRTE_NEW(prte_attribute_t);
+    kv = PMIX_NEW(prte_attribute_t);
     kv->key = key;
     kv->local = local;
     if (PRTE_SUCCESS != (rc = prte_attr_load(kv, data, type))) {
-        PRTE_RELEASE(kv);
+        PMIX_RELEASE(kv);
         return rc;
     }
-    prte_list_append(attributes, &kv->super);
+    pmix_list_append(attributes, &kv->super);
     return PRTE_SUCCESS;
 }
 
-prte_attribute_t *prte_fetch_attribute(prte_list_t *attributes, prte_attribute_t *prev,
+prte_attribute_t *prte_fetch_attribute(pmix_list_t *attributes, prte_attribute_t *prev,
                                        prte_attribute_key_t key)
 {
     prte_attribute_t *kv, *end, *next;
@@ -104,7 +105,7 @@ prte_attribute_t *prte_fetch_attribute(prte_list_t *attributes, prte_attribute_t
     /* if prev is NULL, then find the first attr on the list
      * that matches the key */
     if (NULL == prev) {
-        PRTE_LIST_FOREACH(kv, attributes, prte_attribute_t)
+        PMIX_LIST_FOREACH(kv, attributes, prte_attribute_t)
         {
             if (key == kv->key) {
                 return kv;
@@ -115,69 +116,69 @@ prte_attribute_t *prte_fetch_attribute(prte_list_t *attributes, prte_attribute_t
     }
 
     /* if we are at the end of the list, then nothing to do */
-    end = (prte_attribute_t *) prte_list_get_end(attributes);
-    if (prev == end || end == (prte_attribute_t *) prte_list_get_next(&prev->super)
-        || NULL == prte_list_get_next(&prev->super)) {
+    end = (prte_attribute_t *) pmix_list_get_end(attributes);
+    if (prev == end || end == (prte_attribute_t *) pmix_list_get_next(&prev->super)
+        || NULL == pmix_list_get_next(&prev->super)) {
         return NULL;
     }
 
     /* starting with the next item on the list, search
      * for the next attr with the matching key */
-    next = (prte_attribute_t *) prte_list_get_next(&prev->super);
+    next = (prte_attribute_t *) pmix_list_get_next(&prev->super);
     while (NULL != next) {
         if (next->key == key) {
             return next;
         }
-        next = (prte_attribute_t *) prte_list_get_next(&next->super);
+        next = (prte_attribute_t *) pmix_list_get_next(&next->super);
     }
 
     /* if we get here, then no matching key was found */
     return NULL;
 }
 
-int prte_add_attribute(prte_list_t *attributes, prte_attribute_key_t key, bool local, void *data,
+int prte_add_attribute(pmix_list_t *attributes, prte_attribute_key_t key, bool local, void *data,
                        pmix_data_type_t type)
 {
     prte_attribute_t *kv;
     int rc;
 
-    kv = PRTE_NEW(prte_attribute_t);
+    kv = PMIX_NEW(prte_attribute_t);
     kv->key = key;
     kv->local = local;
     if (PRTE_SUCCESS != (rc = prte_attr_load(kv, data, type))) {
-        PRTE_RELEASE(kv);
+        PMIX_RELEASE(kv);
         return rc;
     }
-    prte_list_append(attributes, &kv->super);
+    pmix_list_append(attributes, &kv->super);
     return PRTE_SUCCESS;
 }
 
-int prte_prepend_attribute(prte_list_t *attributes, prte_attribute_key_t key, bool local,
+int prte_prepend_attribute(pmix_list_t *attributes, prte_attribute_key_t key, bool local,
                            void *data, pmix_data_type_t type)
 {
     prte_attribute_t *kv;
     int rc;
 
-    kv = PRTE_NEW(prte_attribute_t);
+    kv = PMIX_NEW(prte_attribute_t);
     kv->key = key;
     kv->local = local;
     if (PRTE_SUCCESS != (rc = prte_attr_load(kv, data, type))) {
-        PRTE_RELEASE(kv);
+        PMIX_RELEASE(kv);
         return rc;
     }
-    prte_list_prepend(attributes, &kv->super);
+    pmix_list_prepend(attributes, &kv->super);
     return PRTE_SUCCESS;
 }
 
-void prte_remove_attribute(prte_list_t *attributes, prte_attribute_key_t key)
+void prte_remove_attribute(pmix_list_t *attributes, prte_attribute_key_t key)
 {
     prte_attribute_t *kv;
 
-    PRTE_LIST_FOREACH(kv, attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, attributes, prte_attribute_t)
     {
         if (key == kv->key) {
-            prte_list_remove_item(attributes, &kv->super);
-            PRTE_RELEASE(kv);
+            pmix_list_remove_item(attributes, &kv->super);
+            PMIX_RELEASE(kv);
             return;
         }
     }
@@ -191,7 +192,7 @@ int prte_attr_register(const char *project, prte_attribute_key_t key_base,
     for (i = 0; i < MAX_CONVERTERS; ++i) {
         if (0 == converters[i].init) {
             converters[i].init = 1;
-            prte_string_copy(converters[i].project, project, MAX_CONVERTER_PROJECT_LEN);
+            pmix_string_copy(converters[i].project, project, MAX_CONVERTER_PROJECT_LEN);
             converters[i].project[MAX_CONVERTER_PROJECT_LEN - 1] = '\0';
             converters[i].key_base = key_base;
             converters[i].key_max = key_max;
@@ -203,23 +204,25 @@ int prte_attr_register(const char *project, prte_attribute_key_t key_base,
     return PRTE_ERR_OUT_OF_RESOURCE;
 }
 
-char *prte_attr_print_list(prte_list_t *attributes)
+char *prte_attr_print_list(pmix_list_t *attributes)
 {
     char *out1, **cache = NULL;
     prte_attribute_t *attr;
 
-    PRTE_LIST_FOREACH(attr, attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(attr, attributes, prte_attribute_t)
     {
-        prte_argv_append_nosize(&cache, prte_attr_key_to_str(attr->key));
+        pmix_argv_append_nosize(&cache, prte_attr_key_to_str(attr->key));
     }
     if (NULL != cache) {
-        out1 = prte_argv_join(cache, '\n');
-        prte_argv_free(cache);
+        out1 = pmix_argv_join(cache, '\n');
+        pmix_argv_free(cache);
     } else {
         out1 = NULL;
     }
     return out1;
 }
+
+static char unknownkey[180] = {0};
 
 const char *prte_attr_key_to_str(prte_attribute_key_t key)
 {
@@ -302,8 +305,8 @@ const char *prte_attr_key_to_str(prte_attribute_key_t key)
             return "JOB-SNAPC-FINI-BARRIER-ID";
         case PRTE_JOB_NUM_NONZERO_EXIT:
             return "JOB-NUM-NONZERO-EXIT";
-        case PRTE_JOB_FAILURE_TIMER_EVENT:
-            return "JOB-FAILURE-TIMER-EVENT";
+        case PRTE_SPAWN_TIMEOUT_EVENT:
+            return "SPAWN-TIMEOUT-EVENT";
         case PRTE_JOB_ABORTED_PROC:
             return "JOB-ABORTED-PROC";
         case PRTE_JOB_MAPPER:
@@ -384,8 +387,6 @@ const char *prte_attr_key_to_str(prte_attribute_key_t key)
             return "PRTE_JOB_TRANSPORT_KEY";
         case PRTE_JOB_INFO_CACHE:
             return "PRTE_JOB_INFO_CACHE";
-        case PRTE_JOB_FULLY_DESCRIBED:
-            return "PRTE_JOB_FULLY_DESCRIBED";
         case PRTE_JOB_SILENT_TERMINATION:
             return "PRTE_JOB_SILENT_TERMINATION";
         case PRTE_JOB_SET_ENVAR:
@@ -460,15 +461,31 @@ const char *prte_attr_key_to_str(prte_attribute_key_t key)
             return "ENVARS-HARVESTED";
         case PRTE_JOB_OUTPUT_NOCOPY:
             return "DO-NOT-COPY-OUTPUT";
+        case PRTE_SPAWN_TIMEOUT:
+            return "SPAWN-TIMEOUT";
+        case PRTE_JOB_RAW_OUTPUT:
+            return "DO-NOT-BUFFER-OUTPUT";
+        case PRTE_JOB_EXEC_AGENT:
+            return "EXEC-AGENT";
+        case PRTE_JOB_NOAGG_HELP:
+            return "DO-NOT-AGGREGATE-HELP";
+        case PRTE_JOB_COLOCATE_PROCS:
+            return "COLOCATE PROCS";
+        case PRTE_JOB_COLOCATE_NPERPROC:
+            return "NUM PROCS TO COLOCATE PER PROC";
+        case PRTE_JOB_COLOCATE_NPERNODE:
+            return "NUM PROCS TO COLOCATE PER NODE";
+        case PRTE_JOB_TAG_OUTPUT_DETAILED:
+            return "DETAILED OUTPUT TAG";
+        case PRTE_JOB_TAG_OUTPUT_FULLNAME:
+            return "FULL NSPACE IN OUTPUT TAG";
+        case PRTE_JOB_TERM_NONZERO_EXIT:
+            return "TERM IF NONZERO EXIT";
+        case PRTE_JOB_CONTROLS:
+            return "JOB CONTROLS";
 
         case PRTE_PROC_NOBARRIER:
             return "PROC-NOBARRIER";
-        case PRTE_PROC_CPU_BITMAP:
-            return "PROC-CPU-BITMAP";
-        case PRTE_PROC_HWLOC_LOCALE:
-            return "PROC-HWLOC-LOCALE";
-        case PRTE_PROC_HWLOC_BOUND:
-            return "PROC-HWLOC-BOUND";
         case PRTE_PROC_PRIOR_NODE:
             return "PROC-PRIOR-NODE";
         case PRTE_PROC_NRESTARTS:
@@ -511,7 +528,8 @@ const char *prte_attr_key_to_str(prte_attribute_key_t key)
         case PRTE_RML_ROUTED_ATTRIB:
             return "RML-DESIRED-ROUTED-MODULES";
         default:
-            return "UNKNOWN-KEY";
+            pmix_snprintf(unknownkey, 180, "UNKNOWN-KEY: %d", key);
+            return unknownkey;
         }
     }
 
@@ -525,7 +543,8 @@ const char *prte_attr_key_to_str(prte_attribute_key_t key)
     }
 
     /* get here if nobody know what to do */
-    return "UNKNOWN-KEY";
+    pmix_snprintf(unknownkey, 180, "UNKNOWN-KEY: %d", key);
+    return unknownkey;
 }
 
 int prte_attr_load(prte_attribute_t *kv, void *data, pmix_data_type_t type)
@@ -533,6 +552,7 @@ int prte_attr_load(prte_attribute_t *kv, void *data, pmix_data_type_t type)
     pmix_byte_object_t *boptr;
     struct timeval *tv;
     pmix_envar_t *envar;
+    pmix_status_t rc;
 
     kv->data.type = type;
     if (NULL == data) {
@@ -643,24 +663,37 @@ int prte_attr_load(prte_attribute_t *kv, void *data, pmix_data_type_t type)
 
     case PMIX_PROC_NSPACE:
         PMIX_PROC_CREATE(kv->data.data.proc, 1);
+        if (NULL == kv->data.data.proc) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         PMIX_LOAD_NSPACE(kv->data.data.proc->nspace, (char *) data);
         break;
 
     case PMIX_PROC:
         PMIX_PROC_CREATE(kv->data.data.proc, 1);
+        if (NULL == kv->data.data.proc) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         PMIX_XFER_PROCID(kv->data.data.proc, (pmix_proc_t *) data);
         break;
 
     case PMIX_ENVAR:
         PMIX_ENVAR_CONSTRUCT(&kv->data.data.envar);
         envar = (pmix_envar_t *) data;
-        if (NULL != envar->envar) {
-            kv->data.data.envar.envar = strdup(envar->envar);
+        if (NULL != envar) {
+            if (NULL != envar->envar) {
+                kv->data.data.envar.envar = strdup(envar->envar);
+            }
+            if (NULL != envar->value) {
+                kv->data.data.envar.value = strdup(envar->value);
+            }
+            kv->data.data.envar.separator = envar->separator;
         }
-        if (NULL != envar->value) {
-            kv->data.data.envar.value = strdup(envar->value);
-        }
-        kv->data.data.envar.separator = envar->separator;
+        break;
+
+    case PMIX_DATA_ARRAY:
+        rc = PMIx_Data_copy((void**)&kv->data.data.darray, data, PMIX_DATA_ARRAY);
+        return rc;
         break;
 
     default:
@@ -674,6 +707,8 @@ int prte_attr_unload(prte_attribute_t *kv, void **data, pmix_data_type_t type)
 {
     pmix_byte_object_t *boptr;
     pmix_envar_t *envar;
+    pmix_data_array_t *darray;
+    pmix_status_t rc;
     pmix_data_type_t pointers[] = {
         PMIX_STRING,
         PMIX_BYTE_OBJECT,
@@ -681,6 +716,7 @@ int prte_attr_unload(prte_attribute_t *kv, void **data, pmix_data_type_t type)
         PMIX_PROC_NSPACE,
         PMIX_PROC,
         PMIX_ENVAR,
+        PMIX_DATA_ARRAY,
         PMIX_UNDEF};
     int n;
     bool found = false;
@@ -761,6 +797,9 @@ int prte_attr_unload(prte_attribute_t *kv, void **data, pmix_data_type_t type)
 
     case PMIX_BYTE_OBJECT:
         boptr = (pmix_byte_object_t *) malloc(sizeof(pmix_byte_object_t));
+        if (NULL == boptr) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         if (NULL != kv->data.data.bo.bytes && 0 < kv->data.data.bo.size) {
             boptr->bytes = (char *) malloc(kv->data.data.bo.size);
             memcpy(boptr->bytes, kv->data.data.bo.bytes, kv->data.data.bo.size);
@@ -790,16 +829,25 @@ int prte_attr_unload(prte_attribute_t *kv, void **data, pmix_data_type_t type)
 
     case PMIX_PROC_NSPACE:
         PMIX_PROC_CREATE(*data, 1);
+        if (NULL == *data) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         memcpy(*data, kv->data.data.proc->nspace, sizeof(pmix_nspace_t));
         break;
 
     case PMIX_PROC:
         PMIX_PROC_CREATE(*data, 1);
+        if (NULL == *data) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         memcpy(*data, kv->data.data.proc, sizeof(pmix_proc_t));
         break;
 
     case PMIX_ENVAR:
         PMIX_ENVAR_CREATE(envar, 1);
+        if (NULL == envar) {
+            return PRTE_ERR_OUT_OF_RESOURCE;
+        }
         if (NULL != kv->data.data.envar.envar) {
             envar->envar = strdup(kv->data.data.envar.envar);
         }
@@ -808,6 +856,15 @@ int prte_attr_unload(prte_attribute_t *kv, void **data, pmix_data_type_t type)
         }
         envar->separator = kv->data.data.envar.separator;
         *data = envar;
+        break;
+
+    case PMIX_DATA_ARRAY:
+        rc = PMIx_Data_copy((void**)&darray, kv->data.data.darray, PMIX_DATA_ARRAY);
+        if (PMIX_SUCCESS != rc) {
+            *data = NULL;
+            return prte_pmix_convert_status(rc);
+        }
+        *data = darray;
         break;
 
     default:

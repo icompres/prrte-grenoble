@@ -16,7 +16,7 @@
  * Copyright (c) 2017      Mellanox Technologies. All rights reserved.
  * Copyright (c) 2017-2019 Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -43,13 +43,13 @@
 #endif
 
 #include "src/pmix/pmix-internal.h"
-#include "src/util/os_dirpath.h"
+#include "src/util/pmix_os_dirpath.h"
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/odls/odls_types.h"
-#include "src/mca/rml/rml.h"
+#include "src/rml/rml.h"
 #include "src/runtime/prte_globals.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 #include "src/util/name_fns.h"
 
 #include "src/mca/iof/base/base.h"
@@ -70,7 +70,6 @@ static int prted_pull(const pmix_proc_t *src_name, prte_iof_tag_t src_tag, int f
 
 static int prted_close(const pmix_proc_t *peer, prte_iof_tag_t source_tag);
 
-static int prted_output(const pmix_proc_t *peer, prte_iof_tag_t source_tag, const char *msg);
 
 static void prted_complete(const prte_job_t *jdata);
 
@@ -79,9 +78,7 @@ static int finalize(void);
 /* The API's in this module are solely used to support LOCAL
  * procs - i.e., procs that are co-located to the daemon. Output
  * from local procs is automatically sent to the HNP for output
- * and possible forwarding to other requestors. The HNP automatically
- * determines and wires up the stdin configuration, so we don't
- * have to do anything here.
+ * and possible forwarding to other requestors.
  */
 
 prte_iof_base_module_t prte_iof_prted_module = {
@@ -89,7 +86,6 @@ prte_iof_base_module_t prte_iof_prted_module = {
     .push = prted_push,
     .pull = prted_pull,
     .close = prted_close,
-    .output = prted_output,
     .complete = prted_complete,
     .finalize = finalize,
 };
@@ -98,11 +94,11 @@ static int init(void)
 {
     /* post a non-blocking RML receive to get messages
      from the HNP IOF component */
-    prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_IOF_PROXY, PRTE_RML_PERSISTENT,
-                            prte_iof_prted_recv, NULL);
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_IOF_PROXY,
+                  PRTE_RML_PERSISTENT, prte_iof_prted_recv, NULL);
 
     /* setup the local global variables */
-    PRTE_CONSTRUCT(&prte_iof_prted_component.procs, prte_list_t);
+    PMIX_CONSTRUCT(&prte_iof_prted_component.procs, pmix_list_t);
     prte_iof_prted_component.xoff = false;
 
     return PRTE_SUCCESS;
@@ -135,7 +131,7 @@ static int prted_push(const pmix_proc_t *dst_name, prte_iof_tag_t src_tag, int f
     }
 
     /* do we already have this process in our list? */
-    PRTE_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
+    PMIX_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
     {
         if (PMIX_CHECK_PROCID(&proct->name, dst_name)) {
             /* found it */
@@ -143,9 +139,9 @@ static int prted_push(const pmix_proc_t *dst_name, prte_iof_tag_t src_tag, int f
         }
     }
     /* if we get here, then we don't yet have this proc in our list */
-    proct = PRTE_NEW(prte_iof_proc_t);
+    proct = PMIX_NEW(prte_iof_proc_t);
     PMIX_XFER_PROCID(&proct->name, dst_name);
-    prte_list_append(&prte_iof_prted_component.procs, &proct->super);
+    pmix_list_append(&prte_iof_prted_component.procs, &proct->super);
 
 SETUP:
     /* get the local jobdata for this proc */
@@ -217,7 +213,7 @@ static int prted_pull(const pmix_proc_t *dst_name, prte_iof_tag_t src_tag, int f
     }
 
     /* do we already have this process in our list? */
-    PRTE_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
+    PMIX_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
     {
         if (PRTE_EQUAL == prte_util_compare_name_fields(mask, &proct->name, dst_name)) {
             /* found it */
@@ -225,9 +221,9 @@ static int prted_pull(const pmix_proc_t *dst_name, prte_iof_tag_t src_tag, int f
         }
     }
     /* if we get here, then we don't yet have this proc in our list */
-    proct = PRTE_NEW(prte_iof_proc_t);
+    proct = PMIX_NEW(prte_iof_proc_t);
     PMIX_XFER_PROCID(&proct->name, dst_name);
-    prte_list_append(&prte_iof_prted_component.procs, &proct->super);
+    pmix_list_append(&prte_iof_prted_component.procs, &proct->super);
 
 SETUP:
     PRTE_IOF_SINK_DEFINE(&proct->stdinev, dst_name, fd, PRTE_IOF_STDIN, stdin_write_handler);
@@ -244,31 +240,31 @@ static int prted_close(const pmix_proc_t *peer, prte_iof_tag_t source_tag)
 {
     prte_iof_proc_t *proct;
 
-    PRTE_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
+    PMIX_LIST_FOREACH(proct, &prte_iof_prted_component.procs, prte_iof_proc_t)
     {
         if (PMIX_CHECK_PROCID(&proct->name, peer)) {
             if (PRTE_IOF_STDIN & source_tag) {
                 if (NULL != proct->stdinev) {
-                    PRTE_RELEASE(proct->stdinev);
+                    PMIX_RELEASE(proct->stdinev);
                 }
                 proct->stdinev = NULL;
             }
             if ((PRTE_IOF_STDOUT & source_tag) || (PRTE_IOF_STDMERGE & source_tag)) {
                 if (NULL != proct->revstdout) {
-                    PRTE_RELEASE(proct->revstdout);
+                    PMIX_RELEASE(proct->revstdout);
                 }
                 proct->revstdout = NULL;
             }
             if (PRTE_IOF_STDERR & source_tag) {
                 if (NULL != proct->revstderr) {
-                    PRTE_RELEASE(proct->revstderr);
+                    PMIX_RELEASE(proct->revstderr);
                 }
                 proct->revstderr = NULL;
             }
             /* if we closed them all, then remove this proc */
             if (NULL == proct->stdinev && NULL == proct->revstdout && NULL == proct->revstderr) {
-                prte_list_remove_item(&prte_iof_prted_component.procs, &proct->super);
-                PRTE_RELEASE(proct);
+                pmix_list_remove_item(&prte_iof_prted_component.procs, &proct->super);
+                PMIX_RELEASE(proct);
             }
             break;
         }
@@ -282,21 +278,21 @@ static void prted_complete(const prte_job_t *jdata)
     prte_iof_proc_t *proct, *next;
 
     /* cleanout any lingering sinks */
-    PRTE_LIST_FOREACH_SAFE(proct, next, &prte_iof_prted_component.procs, prte_iof_proc_t)
+    PMIX_LIST_FOREACH_SAFE(proct, next, &prte_iof_prted_component.procs, prte_iof_proc_t)
     {
         if (PMIX_CHECK_NSPACE(jdata->nspace, proct->name.nspace)) {
-            prte_list_remove_item(&prte_iof_prted_component.procs, &proct->super);
-            PRTE_RELEASE(proct);
+            pmix_list_remove_item(&prte_iof_prted_component.procs, &proct->super);
+            PMIX_RELEASE(proct);
         }
     }
 }
 
 static int finalize(void)
 {
-    PRTE_LIST_DESTRUCT(&prte_iof_prted_component.procs);
+    PMIX_LIST_DESTRUCT(&prte_iof_prted_component.procs);
 
     /* Cancel the RML receive */
-    prte_rml.recv_cancel(PRTE_NAME_WILDCARD, PRTE_RML_TAG_IOF_PROXY);
+    PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_IOF_PROXY);
     return PRTE_SUCCESS;
 }
 
@@ -304,11 +300,11 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
 {
     prte_iof_sink_t *sink = (prte_iof_sink_t *) cbdata;
     prte_iof_write_event_t *wev = sink->wev;
-    prte_list_item_t *item;
+    pmix_list_item_t *item;
     prte_iof_write_output_t *output;
     int num_written;
 
-    PRTE_ACQUIRE_OBJECT(sink);
+    PMIX_ACQUIRE_OBJECT(sink);
 
     PRTE_OUTPUT_VERBOSE((1, prte_iof_base_framework.framework_output,
                          "%s prted:stdin:write:handler writing data to %d",
@@ -316,7 +312,7 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
 
     wev->pending = false;
 
-    while (NULL != (item = prte_list_remove_first(&wev->outputs))) {
+    while (NULL != (item = pmix_list_remove_first(&wev->outputs))) {
         output = (prte_iof_write_output_t *) item;
         if (0 == output->numbytes) {
             /* this indicates we are to close the fd - there is
@@ -326,7 +322,7 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
                 (20, prte_iof_base_framework.framework_output,
                  "%s iof:prted closing fd %d on write event due to zero bytes output",
                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), wev->fd));
-            PRTE_RELEASE(wev);
+            PMIX_RELEASE(wev);
             sink->wev = NULL;
             return;
         }
@@ -337,7 +333,7 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
         if (num_written < 0) {
             if (EAGAIN == errno || EINTR == errno) {
                 /* push this item back on the front of the list */
-                prte_list_prepend(&wev->outputs, item);
+                pmix_list_prepend(&wev->outputs, item);
                 /* leave the write event running so it will call us again
                  * when the fd is ready.
                  */
@@ -347,12 +343,12 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
             /* otherwise, something bad happened so all we can do is declare an
              * error and abort
              */
-            PRTE_RELEASE(output);
+            PMIX_RELEASE(output);
             PRTE_OUTPUT_VERBOSE(
                 (20, prte_iof_base_framework.framework_output,
                  "%s iof:prted closing fd %d on write event due to negative bytes written",
                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), wev->fd));
-            PRTE_RELEASE(wev);
+            PMIX_RELEASE(wev);
             sink->wev = NULL;
             /* tell the HNP to stop sending us stuff */
             if (!prte_iof_prted_component.xoff) {
@@ -368,14 +364,14 @@ static void stdin_write_handler(int _fd, short event, void *cbdata)
             /* incomplete write - adjust data to avoid duplicate output */
             memmove(output->data, &output->data[num_written], output->numbytes - num_written);
             /* push this item back on the front of the list */
-            prte_list_prepend(&wev->outputs, item);
+            pmix_list_prepend(&wev->outputs, item);
             /* leave the write event running so it will call us again
              * when the fd is ready.
              */
             PRTE_IOF_SINK_ACTIVATE(wev);
             goto CHECK;
         }
-        PRTE_RELEASE(output);
+        PMIX_RELEASE(output);
     }
 
 CHECK:
@@ -389,56 +385,10 @@ CHECK:
          * is no clear way to resolve this as different procs
          * may take input at different rates.
          */
-        if (prte_list_get_size(&wev->outputs) < PRTE_IOF_MAX_INPUT_BUFFERS) {
+        if (pmix_list_get_size(&wev->outputs) < PRTE_IOF_MAX_INPUT_BUFFERS) {
             /* restart the read */
             prte_iof_prted_component.xoff = false;
             prte_iof_prted_send_xonxoff(PRTE_IOF_XON);
         }
     }
-}
-
-static int prted_output(const pmix_proc_t *peer, prte_iof_tag_t source_tag, const char *msg)
-{
-    pmix_data_buffer_t *buf;
-    int rc;
-
-    /* prep the buffer */
-    PMIX_DATA_BUFFER_CREATE(buf);
-
-    /* pack the stream first - we do this so that flow control messages can
-     * consist solely of the tag
-     */
-    rc = PMIx_Data_pack(NULL, buf, &source_tag, 1, PMIX_UINT16);
-    if (PMIX_SUCCESS != rc) {
-        PMIX_ERROR_LOG(rc);
-        PMIX_DATA_BUFFER_RELEASE(buf);
-        return rc;
-    }
-
-    /* pack name of process that gave us this data */
-    rc = PMIx_Data_pack(NULL, buf, (pmix_proc_t *) peer, 1, PMIX_PROC);
-    if (PMIX_SUCCESS != rc) {
-        PMIX_ERROR_LOG(rc);
-        PMIX_DATA_BUFFER_RELEASE(buf);
-        return rc;
-    }
-
-    /* pack the data - for compatibility, we have to pack this as PRTE_BYTE,
-     * so ensure we include the NULL string terminator */
-    rc = PMIx_Data_pack(NULL, buf, (void *) msg, strlen(msg) + 1, PMIX_BYTE);
-    if (PMIX_SUCCESS != rc) {
-        PMIX_ERROR_LOG(rc);
-        PMIX_DATA_BUFFER_RELEASE(buf);
-        return rc;
-    }
-
-    /* start non-blocking RML call to forward received data */
-    PRTE_OUTPUT_VERBOSE((1, prte_iof_base_framework.framework_output,
-                         "%s iof:prted:output sending %d bytes to HNP",
-                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (int) strlen(msg) + 1));
-
-    prte_rml.send_buffer_nb(PRTE_PROC_MY_HNP, buf, PRTE_RML_TAG_IOF_HNP, prte_rml_send_callback,
-                            NULL);
-
-    return PRTE_SUCCESS;
 }

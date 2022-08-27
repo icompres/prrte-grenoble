@@ -16,7 +16,7 @@
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2017      IBM Corporation.  All rights reserved.
  * Copyright (c) 2017      Mellanox Technologies. All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -32,11 +32,12 @@
 
 #include "src/mca/base/base.h"
 #include "src/mca/mca.h"
-#include "src/util/basename.h"
-#include "src/util/os_dirpath.h"
+#include "src/pmix/pmix-internal.h"
+#include "src/util/pmix_basename.h"
+#include "src/util/pmix_os_dirpath.h"
 #include "src/util/output.h"
 
-#include "src/mca/rml/rml.h"
+#include "src/rml/rml.h"
 #include "src/runtime/prte_globals.h"
 #include "src/util/name_fns.h"
 #include "src/util/proc_info.h"
@@ -62,11 +63,13 @@ int prte_iof_base_output_limit = 0;
 
 static int prte_iof_base_register(prte_mca_base_register_flag_t flags)
 {
+    PRTE_HIDE_UNUSED_PARAMS(flags);
+
     /* check for maximum number of pending output messages */
     prte_iof_base_output_limit = (size_t) INT_MAX;
     (void) prte_mca_base_var_register("prte", "iof", "base", "output_limit",
                                       "Maximum backlog of output messages [default: unlimited]",
-                                      PRTE_MCA_BASE_VAR_TYPE_SIZE_T, NULL, 0,
+                                      PRTE_MCA_BASE_VAR_TYPE_INT, NULL, 0,
                                       PRTE_MCA_BASE_VAR_FLAG_NONE, PRTE_INFO_LVL_9,
                                       PRTE_MCA_BASE_VAR_SCOPE_READONLY,
                                       &prte_iof_base_output_limit);
@@ -99,6 +102,39 @@ PRTE_MCA_BASE_FRAMEWORK_DECLARE(prte, iof, "PRTE I/O Forwarding",
                                 prte_iof_base_static_components,
                                 PRTE_MCA_BASE_FRAMEWORK_FLAG_DEFAULT);
 
+
+static void lkcbfunc(pmix_status_t status, void *cbdata)
+{
+    prte_iof_deliver_t *p = (prte_iof_deliver_t*)cbdata;
+
+    /* nothing to do here - we use this solely to
+     * ensure that IOF_deliver doesn't block */
+    if (PMIX_SUCCESS != status) {
+        PMIX_ERROR_LOG(status);
+    }
+    PMIX_RELEASE(p);
+}
+
+
+void prte_iof_base_output(const pmix_proc_t *source,
+                          pmix_iof_channel_t channel,
+                          char *string)
+{
+    prte_iof_deliver_t *p;
+    pmix_status_t rc;
+
+    p = PMIX_NEW(prte_iof_deliver_t);
+    PMIX_XFER_PROCID(&p->source, source);
+    p->bo.bytes = string;
+    p->bo.size = strlen(string);
+    rc = PMIx_server_IOF_deliver(&p->source, channel, &p->bo, NULL, 0, lkcbfunc, (void*)p);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        PMIX_RELEASE(p);  // releases string
+    }
+}
+
+
 /* class instances */
 static void prte_iof_base_proc_construct(prte_iof_proc_t *ptr)
 {
@@ -109,23 +145,23 @@ static void prte_iof_base_proc_construct(prte_iof_proc_t *ptr)
 static void prte_iof_base_proc_destruct(prte_iof_proc_t *ptr)
 {
     if (NULL != ptr->stdinev) {
-        PRTE_RELEASE(ptr->stdinev);
+        PMIX_RELEASE(ptr->stdinev);
     }
     if (NULL != ptr->revstdout) {
-        PRTE_RELEASE(ptr->revstdout);
+        PMIX_RELEASE(ptr->revstdout);
     }
     if (NULL != ptr->revstderr) {
-        PRTE_RELEASE(ptr->revstderr);
+        PMIX_RELEASE(ptr->revstderr);
     }
 }
-PRTE_CLASS_INSTANCE(prte_iof_proc_t, prte_list_item_t,
+PMIX_CLASS_INSTANCE(prte_iof_proc_t, pmix_list_item_t,
                     prte_iof_base_proc_construct,
                     prte_iof_base_proc_destruct);
 
 static void prte_iof_base_sink_construct(prte_iof_sink_t *ptr)
 {
     PMIX_LOAD_PROCID(&ptr->daemon, NULL, PMIX_RANK_INVALID);
-    ptr->wev = PRTE_NEW(prte_iof_write_event_t);
+    ptr->wev = PMIX_NEW(prte_iof_write_event_t);
     ptr->xoff = false;
     ptr->exclusive = false;
     ptr->closed = false;
@@ -137,10 +173,10 @@ static void prte_iof_base_sink_destruct(prte_iof_sink_t *ptr)
                              "%s iof: closing sink for process %s on fd %d",
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&ptr->name),
                              ptr->wev->fd));
-        PRTE_RELEASE(ptr->wev);
+        PMIX_RELEASE(ptr->wev);
     }
 }
-PRTE_CLASS_INSTANCE(prte_iof_sink_t, prte_list_item_t,
+PMIX_CLASS_INSTANCE(prte_iof_sink_t, pmix_list_item_t,
                     prte_iof_base_sink_construct,
                     prte_iof_base_sink_destruct);
 
@@ -172,13 +208,13 @@ static void prte_iof_base_read_event_destruct(prte_iof_read_event_t *rev)
         free(rev->ev);
     }
     if (NULL != rev->sink) {
-        PRTE_RELEASE(rev->sink);
+        PMIX_RELEASE(rev->sink);
     }
     if (NULL != proct) {
-        PRTE_RELEASE(proct);
+        PMIX_RELEASE(proct);
     }
 }
-PRTE_CLASS_INSTANCE(prte_iof_read_event_t, prte_object_t,
+PMIX_CLASS_INSTANCE(prte_iof_read_event_t, pmix_object_t,
                     prte_iof_base_read_event_construct,
                     prte_iof_base_read_event_destruct);
 
@@ -187,7 +223,7 @@ static void prte_iof_base_write_event_construct(prte_iof_write_event_t *wev)
     wev->pending = false;
     wev->always_writable = false;
     wev->fd = -1;
-    PRTE_CONSTRUCT(&wev->outputs, prte_list_t);
+    PMIX_CONSTRUCT(&wev->outputs, pmix_list_t);
     wev->ev = prte_event_alloc();
     wev->tv.tv_sec = 0;
     wev->tv.tv_usec = 0;
@@ -205,10 +241,24 @@ static void prte_iof_base_write_event_destruct(prte_iof_write_event_t *wev)
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), wev->fd));
         close(wev->fd);
     }
-    PRTE_DESTRUCT(&wev->outputs);
+    PMIX_DESTRUCT(&wev->outputs);
 }
-PRTE_CLASS_INSTANCE(prte_iof_write_event_t, prte_list_item_t,
+PMIX_CLASS_INSTANCE(prte_iof_write_event_t, pmix_list_item_t,
                     prte_iof_base_write_event_construct,
                     prte_iof_base_write_event_destruct);
 
-PRTE_CLASS_INSTANCE(prte_iof_write_output_t, prte_list_item_t, NULL, NULL);
+PMIX_CLASS_INSTANCE(prte_iof_write_output_t, pmix_list_item_t, NULL, NULL);
+
+static void pdcon(prte_iof_deliver_t *p)
+{
+    p->bo.bytes = NULL;
+    p->bo.size = 0;
+}
+static void pddes(prte_iof_deliver_t *p)
+{
+    if (NULL != p->bo.bytes) {
+        free(p->bo.bytes);
+    }
+}
+PMIX_CLASS_INSTANCE(prte_iof_deliver_t, pmix_object_t,
+                    pdcon, pddes);

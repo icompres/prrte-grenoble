@@ -14,6 +14,7 @@
 # Copyright (c) 2016-2020 Intel, Inc.  All rights reserved.
 # Copyright (c) 2017      Research Organization for Information Science
 #                         and Technology (RIST). All rights reserved.
+# Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
 # $COPYRIGHT$
 #
 # Additional copyrights may follow
@@ -38,23 +39,13 @@ AM_CFLAGS = \
             -DPRTE_WRAPPER_EXTRA_LIBS="\"@PRTE_WRAPPER_EXTRA_LIBS@\"" \
             -DPRTE_GREEK_VERSION="\"@PRTE_GREEK_VERSION@\"" \
             -DPRTE_REPO_REV="\"@PRTE_REPO_REV@\"" \
-            -DPRTE_RELEASE_DATE="\"@PRTE_RELEASE_DATE@\""
+            -DPMIX_RELEASE_DATE="\"@PMIX_RELEASE_DATE@\""
 
-AM_LDFLAGS = $(PRTE_EXTRA_LIB_LDFLAGS) $(prte_hwloc_LDFLAGS) $(prte_libevent_LDFLAGS) $(prte_pmix_LDFLAGS)
-
-include $(top_srcdir)/Makefile.prte-rules
-
-MD_FILES = prte_info.1.md
-man_pages_from_md = $(MD_FILES:.1.md=.1)
-EXTRA_DIST = $(MD_FILES) $(man_pages_from_md)
+AM_LDFLAGS = $(prte_hwloc_LDFLAGS) $(prte_libevent_LDFLAGS) $(prte_pmix_LDFLAGS)
 
 bin_PROGRAMS = prte_info
 
 dist_prtedata_DATA = help-prte-info.txt
-
-if PRTE_ENABLE_MAN_PAGES
-man_MANS = $(man_pages_from_md)
-endif
 
 prte_info_SOURCES = \
         pinfo.h \
@@ -65,7 +56,6 @@ prte_info_SOURCES = \
         version.c
 
 prte_info_LDADD = \
-    $(PRTE_EXTRA_LTLIB) \
     $(prte_libevent_LIBS) \
     $(prte_hwloc_LIBS) \
     $(prte_pmix_LIBS) \

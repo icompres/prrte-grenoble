@@ -15,7 +15,7 @@
  * Copyright (c) 2014-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2019      Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -54,11 +54,11 @@
 
 #include "src/mca/base/base.h"
 #include "src/mca/prteinstalldirs/prteinstalldirs.h"
-#include "src/util/argv.h"
-#include "src/util/basename.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_basename.h"
 #include "src/util/output.h"
-#include "src/util/path.h"
-#include "src/util/prte_environ.h"
+#include "src/util/pmix_path.h"
+#include "src/util/pmix_environ.h"
 
 #include "constants.h"
 #include "src/mca/errmgr/errmgr.h"
@@ -68,9 +68,9 @@
 #include "src/runtime/prte_globals.h"
 #include "src/runtime/prte_quit.h"
 #include "src/runtime/prte_wait.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 #include "src/util/name_fns.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 #include "types.h"
 
 #include "src/prted/prted.h"
@@ -89,20 +89,21 @@ static int plm_slurm_terminate_prteds(void);
 static int plm_slurm_signal_job(pmix_nspace_t jobid, int32_t signal);
 static int plm_slurm_finalize(void);
 
-static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix);
+static int plm_slurm_start_proc(int argc, char **argv, char *prefix);
 
 /*
  * Global variable
  */
-prte_plm_base_module_1_0_0_t prte_plm_slurm_module = {plm_slurm_init,
-                                                      prte_plm_base_set_hnp_name,
-                                                      plm_slurm_launch_job,
-                                                      NULL,
-                                                      prte_plm_base_prted_terminate_job,
-                                                      plm_slurm_terminate_prteds,
-                                                      prte_plm_base_prted_kill_local_procs,
-                                                      plm_slurm_signal_job,
-                                                      plm_slurm_finalize};
+prte_plm_base_module_1_0_0_t prte_plm_slurm_module = {
+    .init = plm_slurm_init,
+    .set_hnp_name = prte_plm_base_set_hnp_name,
+    .spawn = plm_slurm_launch_job,
+    .terminate_job = prte_plm_base_prted_terminate_job,
+    .terminate_orteds = plm_slurm_terminate_prteds,
+    .terminate_procs = prte_plm_base_prted_kill_local_procs,
+    .signal_job = plm_slurm_signal_job,
+    .finalize = plm_slurm_finalize
+};
 
 /*
  * Local variables
@@ -179,19 +180,18 @@ static void launch_daemons(int fd, short args, void *cbdata)
     int argc;
     int rc;
     char *tmp;
-    char **env = NULL;
     char *nodelist_flat;
     char **nodelist_argv;
     char *name_string;
     char **custom_strings;
     int num_args, i;
-    char *cur_prefix;
+    char *cur_prefix = NULL;
     int proc_vpid_index;
     bool failed_launch = true;
     prte_job_t *daemons;
     prte_state_caddy_t *state = (prte_state_caddy_t *) cbdata;
 
-    PRTE_ACQUIRE_OBJECT(state);
+    PMIX_ACQUIRE_OBJECT(state);
 
     PRTE_OUTPUT_VERBOSE((1, prte_plm_base_framework.framework_output,
                          "%s plm:slurm: LAUNCH DAEMONS CALLED",
@@ -215,7 +215,7 @@ static void launch_daemons(int fd, short args, void *cbdata)
          */
         state->jdata->state = PRTE_JOB_STATE_DAEMONS_LAUNCHED;
         PRTE_ACTIVATE_JOB_STATE(state->jdata, PRTE_JOB_STATE_DAEMONS_REPORTED);
-        PRTE_RELEASE(state);
+        PMIX_RELEASE(state);
         return;
     }
 
@@ -236,7 +236,7 @@ static void launch_daemons(int fd, short args, void *cbdata)
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
         state->jdata->state = PRTE_JOB_STATE_DAEMONS_LAUNCHED;
         PRTE_ACTIVATE_JOB_STATE(state->jdata, PRTE_JOB_STATE_DAEMONS_REPORTED);
-        PRTE_RELEASE(state);
+        PMIX_RELEASE(state);
         return;
     }
 
@@ -251,35 +251,26 @@ static void launch_daemons(int fd, short args, void *cbdata)
      */
 
     /* add the srun command */
-    prte_argv_append(&argc, &argv, "srun");
+    pmix_argv_append(&argc, &argv, "srun");
 
     /* start one orted on each node */
-    prte_argv_append(&argc, &argv, "--ntasks-per-node=1");
+    pmix_argv_append(&argc, &argv, "--ntasks-per-node=1");
 
     if (!prte_enable_recovery) {
         /* kill the job if any orteds die */
-        prte_argv_append(&argc, &argv, "--kill-on-bad-exit");
+        pmix_argv_append(&argc, &argv, "--kill-on-bad-exit");
     }
 
     /* our daemons are not an MPI task */
-    prte_argv_append(&argc, &argv, "--mpi=none");
+    pmix_argv_append(&argc, &argv, "--mpi=none");
 
     /* ensure the orteds are not bound to a single processor,
      * just in case the TaskAffinity option is set by default.
      * This will *not* release the orteds from any cpu-set
      * constraint, but will ensure it doesn't get
      * bound to only one processor
-     *
-     * NOTE: We used to pass --cpu_bind=none on the command line.  But
-     * SLURM 19 changed this to --cpu-bind.  There is no easy way to
-     * test at run time which of these two parameters is used (see
-     * https://github.com/open-mpi/ompi/pull/6654).  There was
-     * discussion of using --test-only to see which one works, but
-     * --test-only is only effective if you're not already inside a
-     * SLURM allocation.  Instead, set the env var SLURM_CPU_BIND to
-     * "none", which should do the same thing as --cpu*bind=none.
      */
-    prte_setenv("SLURM_CPU_BIND", "none", true, &env);
+    pmix_argv_append(&argc, &argv, "--cpu-bind=none");
 
     /* protect against launchers that forward the entire environment */
     if (NULL != getenv("PMIX_LAUNCHER_PAUSE_FOR_TOOL")) {
@@ -296,26 +287,26 @@ static void launch_daemons(int fd, short args, void *cbdata)
      * when pmix components are registered
      */
 
-    prte_setenv("PMI_NO_PREINITIALIZE", "1", false, &prte_launch_environ);
-    prte_setenv("PMI_NO_FORK", "1", false, &prte_launch_environ);
-    prte_setenv("OMPI_NO_USE_CRAY_PMI", "1", false, &prte_launch_environ);
+    setenv("PMI_NO_PREINITIALIZE", "1", false);
+    setenv("PMI_NO_FORK", "1", false);
+    setenv("OMPI_NO_USE_CRAY_PMI", "1", false);
 #endif
 
     /* Append user defined arguments to srun */
     if (NULL != prte_plm_slurm_component.custom_args) {
-        custom_strings = prte_argv_split(prte_plm_slurm_component.custom_args, ' ');
-        num_args = prte_argv_count(custom_strings);
+        custom_strings = pmix_argv_split(prte_plm_slurm_component.custom_args, ' ');
+        num_args = pmix_argv_count(custom_strings);
         for (i = 0; i < num_args; ++i) {
-            prte_argv_append(&argc, &argv, custom_strings[i]);
+            pmix_argv_append(&argc, &argv, custom_strings[i]);
         }
-        prte_argv_free(custom_strings);
+        pmix_argv_free(custom_strings);
     }
 
     /* create nodelist */
     nodelist_argv = NULL;
 
     for (n = 0; n < map->nodes->size; n++) {
-        if (NULL == (node = (prte_node_t *) prte_pointer_array_get_item(map->nodes, n))) {
+        if (NULL == (node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, n))) {
             continue;
         }
         /* if the daemon already exists on this node, then
@@ -328,32 +319,32 @@ static void launch_daemons(int fd, short args, void *cbdata)
         /* otherwise, add it to the list of nodes upon which
          * we need to launch a daemon
          */
-        prte_argv_append_nosize(&nodelist_argv, node->name);
+        pmix_argv_append_nosize(&nodelist_argv, node->name);
     }
-    if (0 == prte_argv_count(nodelist_argv)) {
-        prte_show_help("help-plm-slurm.txt", "no-hosts-in-list", true);
+    if (0 == pmix_argv_count(nodelist_argv)) {
+        pmix_show_help("help-plm-slurm.txt", "no-hosts-in-list", true);
         rc = PRTE_ERR_FAILED_TO_START;
         goto cleanup;
     }
-    nodelist_flat = prte_argv_join(nodelist_argv, ',');
-    prte_argv_free(nodelist_argv);
+    nodelist_flat = pmix_argv_join(nodelist_argv, ',');
+    pmix_argv_free(nodelist_argv);
 
     /* if we are using all allocated nodes, then srun doesn't
      * require any further arguments
      */
     if (map->num_new_daemons < prte_num_allocated_nodes) {
-        prte_asprintf(&tmp, "--nodes=%lu", (unsigned long) map->num_new_daemons);
-        prte_argv_append(&argc, &argv, tmp);
+        pmix_asprintf(&tmp, "--nodes=%lu", (unsigned long) map->num_new_daemons);
+        pmix_argv_append(&argc, &argv, tmp);
         free(tmp);
 
-        prte_asprintf(&tmp, "--nodelist=%s", nodelist_flat);
-        prte_argv_append(&argc, &argv, tmp);
+        pmix_asprintf(&tmp, "--nodelist=%s", nodelist_flat);
+        pmix_argv_append(&argc, &argv, tmp);
         free(tmp);
     }
 
     /* tell srun how many tasks to run */
-    prte_asprintf(&tmp, "--ntasks=%lu", (unsigned long) map->num_new_daemons);
-    prte_argv_append(&argc, &argv, tmp);
+    pmix_asprintf(&tmp, "--ntasks=%lu", (unsigned long) map->num_new_daemons);
+    pmix_argv_append(&argc, &argv, tmp);
     free(tmp);
 
     PRTE_OUTPUT_VERBOSE((2, prte_plm_base_framework.framework_output,
@@ -393,18 +384,17 @@ static void launch_daemons(int fd, short args, void *cbdata)
     cur_prefix = NULL;
     for (n = 0; n < state->jdata->apps->size; n++) {
         char *app_prefix_dir;
-        if (NULL
-            == (app = (prte_app_context_t *) prte_pointer_array_get_item(state->jdata->apps, n))) {
+        app = (prte_app_context_t *) pmix_pointer_array_get_item(state->jdata->apps, n);
+        if (NULL == app) {
             continue;
         }
         app_prefix_dir = NULL;
-        prte_get_attribute(&app->attributes, PRTE_APP_PREFIX_DIR, (void **) &app_prefix_dir,
-                           PMIX_STRING);
+        prte_get_attribute(&app->attributes, PRTE_APP_PREFIX_DIR, (void **) &app_prefix_dir, PMIX_STRING);
         /* Check for already set cur_prefix_dir -- if different,
            complain */
         if (NULL != app_prefix_dir) {
             if (NULL != cur_prefix && 0 != strcmp(cur_prefix, app_prefix_dir)) {
-                prte_show_help("help-plm-slurm.txt", "multiple-prefixes", true, cur_prefix,
+                pmix_show_help("help-plm-slurm.txt", "multiple-prefixes", true, cur_prefix,
                                app_prefix_dir);
                 goto cleanup;
             }
@@ -421,15 +411,18 @@ static void launch_daemons(int fd, short args, void *cbdata)
             free(app_prefix_dir);
         }
     }
+    if (NULL == cur_prefix) {
+        // see if it is in the environment
+        if (NULL != (param = getenv("PRTE_PREFIX"))) {
+            cur_prefix = strdup(param);
+        }
+    }
 
     /* protect the args in case someone has a script wrapper around srun */
     prte_plm_base_wrap_args(argv);
 
-    /* setup environment */
-    env = prte_argv_copy(prte_launch_environ);
-
     if (0 < prte_output_get_verbosity(prte_plm_base_framework.framework_output)) {
-        param = prte_argv_join(argv, ' ');
+        param = pmix_argv_join(argv, ' ');
         prte_output(prte_plm_base_framework.framework_output,
                     "%s plm:slurm: final top-level argv:\n\t%s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                     (NULL == param) ? "NULL" : param);
@@ -438,7 +431,7 @@ static void launch_daemons(int fd, short args, void *cbdata)
     }
 
     /* exec the daemon(s) */
-    if (PRTE_SUCCESS != (rc = plm_slurm_start_proc(argc, argv, env, cur_prefix))) {
+    if (PRTE_SUCCESS != (rc = plm_slurm_start_proc(argc, argv, cur_prefix))) {
         PRTE_ERROR_LOG(rc);
         goto cleanup;
     }
@@ -452,19 +445,18 @@ static void launch_daemons(int fd, short args, void *cbdata)
 
 cleanup:
     if (NULL != argv) {
-        prte_argv_free(argv);
+        pmix_argv_free(argv);
     }
-    if (NULL != env) {
-        prte_argv_free(env);
+    if (NULL != cur_prefix) {
+        free(cur_prefix);
     }
-
     /* check for failed launch - if so, force terminate */
     if (failed_launch) {
         PRTE_ACTIVATE_JOB_STATE(state->jdata, PRTE_JOB_STATE_FAILED_TO_LAUNCH);
     }
 
     /* cleanup the caddy */
-    PRTE_RELEASE(state);
+    PMIX_RELEASE(state);
 }
 
 /**
@@ -529,6 +521,49 @@ static void srun_wait_cb(int sd, short fd, void *cbdata)
     prte_wait_tracker_t *t2 = (prte_wait_tracker_t *) cbdata;
     prte_proc_t *proc = t2->child;
     prte_job_t *jdata;
+    FILE *fp;
+    char version[1024], *cptr, *endptr;
+    int major, minor;
+
+    jdata = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
+
+    /* need to check that we are at least version 17.11 */
+    fp = popen("sinfo -V", "r");
+    if (NULL == fp) {
+        /* default to printing the error advice */
+        pmix_show_help("help-plm-slurm.txt", "ancient-version", true, major, minor);
+        PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_DAEMONS_TERMINATED);
+        PMIX_RELEASE(t2);
+        return;
+    }
+    memset(version, 0, sizeof(version));
+    while (NULL != fgets(version, sizeof(version), fp)) {
+        /* if the line doesn't start with "slurm", then ignore it */
+        if (0 != strncasecmp(version, "slurm", strlen("slurm"))) {
+            continue;
+        }
+        cptr = &version[strlen("slurm")+1];
+        major = strtoul(cptr, &cptr, 10);
+        ++cptr;
+        minor = strtoul(cptr, NULL, 10);
+        if (major < 17) {
+            pclose(fp);
+            pmix_show_help("help-plm-slurm.txt", "ancient-version", true, major, minor);
+            PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_DAEMONS_TERMINATED);
+            PMIX_RELEASE(t2);
+            return;
+        }
+        if (17 == major && minor < 11) {
+            pclose(fp);
+            pmix_show_help("help-plm-slurm.txt", "ancient-version", true, major, minor);
+            PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_DAEMONS_TERMINATED);
+            PMIX_RELEASE(t2);
+            return;
+        }
+        /* version was not the issue */
+        break;
+    }
+    pclose(fp);
 
     /* According to the SLURM folks, srun always returns the highest exit
      code of our remote processes. Thus, a non-zero exit status doesn't
@@ -550,7 +585,6 @@ static void srun_wait_cb(int sd, short fd, void *cbdata)
      pid so nobody thinks this is real
      */
 
-    jdata = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
 
     /* abort only if the status returned is non-zero - i.e., if
      * the orteds exited with an error
@@ -563,7 +597,7 @@ static void srun_wait_cb(int sd, short fd, void *cbdata)
                              "%s plm:slurm: srun returned non-zero exit status (%d) from launching "
                              "the per-node daemon",
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), proc->exit_code));
-        PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_ABORTED);
+        PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_DAEMONS_TERMINATED);
     } else {
         /* otherwise, check to see if this is the primary pid */
         if (primary_srun_pid == proc->pid) {
@@ -580,18 +614,20 @@ static void srun_wait_cb(int sd, short fd, void *cbdata)
     }
 
     /* done with this dummy */
-    PRTE_RELEASE(t2);
+    PMIX_RELEASE(t2);
 }
 
-static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
+static int plm_slurm_start_proc(int argc, char **argv, char *prefix)
 {
     int fd;
     int srun_pid;
-    char *exec_argv = prte_path_findv(argv[0], 0, env, NULL);
+    int n;
+    char **tmp = NULL, *p;
+    char *exec_argv = pmix_path_findv(argv[0], 0, environ, NULL);
     prte_proc_t *dummy;
 
     if (NULL == exec_argv) {
-        prte_show_help("help-plm-slurm.txt", "no-srun", true);
+        pmix_show_help("help-plm-slurm.txt", "no-srun", true);
         return PRTE_ERR_SILENT;
     }
 
@@ -610,7 +646,7 @@ static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
     }
 
     /* setup a dummy proc object to track the srun */
-    dummy = PRTE_NEW(prte_proc_t);
+    dummy = PMIX_NEW(prte_proc_t);
     dummy->pid = srun_pid;
     /* be sure to mark it as alive so we don't instantly fire */
     PRTE_FLAG_SET(dummy, PRTE_PROC_FLAG_ALIVE);
@@ -620,13 +656,33 @@ static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
     if (0 == srun_pid) { /* child */
         char *bin_base = NULL, *lib_base = NULL;
 
+        /* Slurm forwards the entire environment, which we
+         * REALLY don't want them to do as it might contain
+         * envars pertaining to tool connections. So purge
+         * the environment of anything PMIx/PRRTE related -
+         * we will have put anything we need on the cmd line */
+        for (n=0; NULL != environ[n]; n++) {
+            if (0 == strncmp(environ[n], "PMIX_", 5) ||
+                0 == strncmp(environ[n], "PRTE_", 5)) {
+                pmix_argv_append_nosize(&tmp, environ[n]);
+            }
+        }
+        if (NULL != tmp) {
+            for (n=0; NULL != tmp[n]; n++) {
+                p = strchr(tmp[n], '=');
+                *p = '\0';
+                unsetenv(tmp[n]);
+            }
+            pmix_argv_free(tmp);
+        }
+
         /* Figure out the basenames for the libdir and bindir.  There
            is a lengthy comment about this in plm_rsh_module.c
            explaining all the rationale for how / why we're doing
            this. */
 
-        lib_base = prte_basename(prte_install_dirs.libdir);
-        bin_base = prte_basename(prte_install_dirs.bindir);
+        lib_base = pmix_basename(prte_install_dirs.libdir);
+        bin_base = pmix_basename(prte_install_dirs.bindir);
 
         /* If we have a prefix, then modify the PATH and
            LD_LIBRARY_PATH environment variables.  */
@@ -636,11 +692,11 @@ static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
             /* Reset PATH */
             oldenv = getenv("PATH");
             if (NULL != oldenv) {
-                prte_asprintf(&newenv, "%s/%s:%s", prefix, bin_base, oldenv);
+                pmix_asprintf(&newenv, "%s/%s:%s", prefix, bin_base, oldenv);
             } else {
-                prte_asprintf(&newenv, "%s/%s", prefix, bin_base);
+                pmix_asprintf(&newenv, "%s/%s", prefix, bin_base);
             }
-            prte_setenv("PATH", newenv, true, &env);
+            setenv("PATH", newenv, true);
             PRTE_OUTPUT_VERBOSE((1, prte_plm_base_framework.framework_output,
                                  "%s plm:slurm: reset PATH: %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                  newenv));
@@ -649,11 +705,11 @@ static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
             /* Reset LD_LIBRARY_PATH */
             oldenv = getenv("LD_LIBRARY_PATH");
             if (NULL != oldenv) {
-                prte_asprintf(&newenv, "%s/%s:%s", prefix, lib_base, oldenv);
+                pmix_asprintf(&newenv, "%s/%s:%s", prefix, lib_base, oldenv);
             } else {
-                prte_asprintf(&newenv, "%s/%s", prefix, lib_base);
+                pmix_asprintf(&newenv, "%s/%s", prefix, lib_base);
             }
-            prte_setenv("LD_LIBRARY_PATH", newenv, true, &env);
+            setenv("LD_LIBRARY_PATH", newenv, true);
             PRTE_OUTPUT_VERBOSE((1, prte_plm_base_framework.framework_output,
                                  "%s plm:slurm: reset LD_LIBRARY_PATH: %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), newenv));
@@ -684,7 +740,7 @@ static int plm_slurm_start_proc(int argc, char **argv, char **env, char *prefix)
            cntl-c) don't get sent to srun */
         setpgid(0, 0);
 
-        execve(exec_argv, argv, env);
+        execvp(exec_argv, argv);
 
         prte_output(0, "plm:slurm:start_proc: exec failed");
         /* don't return - need to exit - returning would be bad -

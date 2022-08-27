@@ -14,7 +14,7 @@
 # Copyright (c) 2012      Los Alamos National Security, Inc.  All rights reserved.
 # Copyright (c) 2013      Mellanox Technologies, Inc.  All rights reserved.
 # Copyright (c) 2016-2020 Intel, Inc.  All rights reserved.
-# Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+# Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
 # $COPYRIGHT$
 #
 # Additional copyrights may follow
@@ -43,6 +43,7 @@ EXAMPLES = \
 	debugger/attach \
 	debugger/daemon \
 	debugger/hello \
+	debugger/stdincheck \
 	dmodex \
 	dynamic \
 	fault \
@@ -56,7 +57,9 @@ EXAMPLES = \
 	bad_exit \
 	jctrl \
 	launcher \
-	showkeys
+	showkeys \
+	legacy \
+	colocate
 
 all: $(EXAMPLES)
 

@@ -10,7 +10,7 @@
 #                         University of Stuttgart.  All rights reserved.
 # Copyright (c) 2004-2005 The Regents of the University of California.
 #                         All rights reserved.
-# Copyright (c) 2006-2020 Cisco Systems, Inc.  All rights reserved
+# Copyright (c) 2006-2022 Cisco Systems, Inc.  All rights reserved
 # Copyright (c) 2006-2008 Sun Microsystems, Inc.  All rights reserved.
 # Copyright (c) 2006-2017 Los Alamos National Security, LLC.  All rights
 #                         reserved.
@@ -20,12 +20,12 @@
 # Copyright (c) 2013      Mellanox Technologies, Inc.
 #                         All rights reserved.
 # Copyright (c) 2013-2020 Intel, Inc.  All rights reserved.
-# Copyright (c) 2014-2019 Research Organization for Information Science
+# Copyright (c) 2014-2022 Research Organization for Information Science
 #                         and Technology (RIST).  All rights reserved.
 # Copyright (c) 2016-2017 IBM Corporation.  All rights reserved.
-# Copyright (c) 2018-2021 Amazon.com, Inc. or its affiliates.
+# Copyright (c) 2018-2022 Amazon.com, Inc. or its affiliates.
 #                         All Rights reserved.
-# Copyright (c) 2021      Nanook Consulting  All rights reserved.
+# Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
 # Copyright (c) 2021      FUJITSU LIMITED.  All rights reserved.
 # $COPYRIGHT$
 #
@@ -49,11 +49,12 @@ m4_include([config/autogen_found_items.m4])
 
 AC_INIT([prte],
         [m4_normalize(esyscmd([config/prte_get_version.sh VERSION --tarball]))],
-        [https://github.com/openpmix/prte/], [prte])
+        [https://github.com/openpmix/prrte/], [prrte])
 
 AC_PREREQ(2.69)
 AC_CONFIG_AUX_DIR(config)
 AC_CONFIG_MACRO_DIR(config)
+
 # autotools expects to perform tests without interference
 # from user-provided CFLAGS, particularly -Werror flags.
 # Search for them here and cache any we find
@@ -82,6 +83,11 @@ PRTE_LOAD_PLATFORM
 
 PRTE_CONFIGURE_SETUP
 
+# compatability for oac_check_package
+m4_copy([PRTE_LOG_COMMAND], [OAC_LOG_COMMAND])
+m4_copy([PRTE_LOG_MSG], [OAC_LOG_MSG])
+m4_copy([PRTE_APPEND], [OAC_APPEND])
+
 prte_show_title "Configuring PRTE"
 
 #
@@ -89,6 +95,8 @@ prte_show_title "Configuring PRTE"
 #
 
 prte_show_subtitle "Startup tests"
+
+AC_PROG_SED
 
 AC_CHECK_PROG([PERL],[perl],[perl],[no])
 AS_IF([test "X$PERL" = "Xno"],
@@ -153,30 +161,11 @@ AC_DEFUN([PRTE_CHECK_DIR_FOR_SPACES],[
            AC_MSG_ERROR([Cannot continue.])])
 ])
 
-AC_DEFUN([PRTE_CANONICALIZE_PATH],[
-    case $host_os in
-    darwin*)
-        # MacOS does not have "readlink -f" or realpath (at least as
-        # of MacOS Cataline / 10.15).  Instead, use Python, because we
-        # know MacOS comes with a /usr/bin/python that has
-        # os.path.realpath.
-        $2=`/usr/bin/python -c 'import os; print os.path.realpath("'$1'")'`
-        ;;
-    *)
-        $2=`readlink -f $1`
-        ;;
-    esac
-])
-
 PRTE_VAR_SCOPE_PUSH(prte_checkdir)
-PRTE_CHECK_DIR_FOR_SPACES([$srcdir], [a], [source tree])
-PRTE_CANONICALIZE_PATH([$srcdir], [prte_checkdir])
-PRTE_CHECK_DIR_FOR_SPACES([$prte_checkdir], [an], [absolute source tree])
-PRTE_CANONICALIZE_PATH([.], [prte_checkdir])
+prte_checkdir=`pwd`
 PRTE_CHECK_DIR_FOR_SPACES([$prte_checkdir], [a], [build tree])
 PRTE_CHECK_DIR_FOR_SPACES([$prefix], [a], [prefix])
-PRTE_CANONICALIZE_PATH([$prefix], [prte_checkdir])
-PRTE_CHECK_DIR_FOR_SPACES([$prte_checkdir], [an], [absolute prefix])
+PRTE_CHECK_DIR_FOR_SPACES([$srcdir], [a], [source tree])
 PRTE_VAR_SCOPE_POP
 
 prte_show_subtitle "Checking versions"
@@ -293,7 +282,6 @@ fi
 
 AC_ENABLE_SHARED([])
 AC_DISABLE_STATIC([])
-PRTE_SETUP_WRAPPER_INIT
 
 ##################################
 # Check for known incompatibility
@@ -335,84 +323,14 @@ PRTE_SETUP_CC
 PRTE_CHECK_IDENT([CC], [CFLAGS], [c], [C])
 
 #
-# Check for some types
-#
-
-AC_CHECK_TYPES(int8_t)
-AC_CHECK_TYPES(uint8_t)
-AC_CHECK_TYPES(int16_t)
-AC_CHECK_TYPES(uint16_t)
-AC_CHECK_TYPES(int32_t)
-AC_CHECK_TYPES(uint32_t)
-AC_CHECK_TYPES(int64_t)
-AC_CHECK_TYPES(uint64_t)
-AC_CHECK_TYPES(int128_t)
-AC_CHECK_TYPES(__int128)
-AC_CHECK_TYPES(uint128_t)
-AC_CHECK_TYPES(long long)
-AC_CHECK_TYPES(__float128)
-AC_CHECK_TYPES(long double)
-# We only need these types if we're building the OMPI project, but
-# PRTE currently doesn't protect for their lack of presence well.
-AC_CHECK_HEADERS(complex.h)
-AC_CHECK_TYPES(float _Complex)
-AC_CHECK_TYPES(double _Complex)
-AC_CHECK_TYPES(long double _Complex)
-AC_CHECK_TYPES(intptr_t)
-AC_CHECK_TYPES(uintptr_t)
-AC_CHECK_TYPES(mode_t)
-AC_CHECK_TYPES(ssize_t)
-AC_CHECK_TYPES(ptrdiff_t)
-
-#
 # Check for type sizes
 #
 
-AC_CHECK_SIZEOF(_Bool)
-AC_CHECK_SIZEOF(char)
-AC_CHECK_SIZEOF(short)
 AC_CHECK_SIZEOF(int)
 AC_CHECK_SIZEOF(long)
 AC_CHECK_SIZEOF(long long)
-AC_CHECK_SIZEOF(float)
-AC_CHECK_SIZEOF(double)
-
-if test "$ac_cv_type_long_double" = yes; then
-    AC_CHECK_SIZEOF(long double)
-fi
-
-AC_CHECK_SIZEOF(long double)
-if test "$ac_cv_type___float128" = yes; then
-    AC_CHECK_SIZEOF(__float128)
-fi
-
-# We only need these types if we're building the OMPI project, but
-# PRTE currently doesn't protect for their lack of presence well.
-AC_CHECK_SIZEOF(float _Complex)
-AC_CHECK_SIZEOF(double _Complex)
-AC_CHECK_SIZEOF(long double _Complex)
-
 AC_CHECK_SIZEOF(void *)
 AC_CHECK_SIZEOF(size_t)
-
-if test "$ac_cv_type_ssize_t" = yes ; then
-    AC_CHECK_SIZEOF(ssize_t)
-fi
-
-if test "$ac_cv_type_ptrdiff_t" = yes; then
-    AC_CHECK_SIZEOF(ptrdiff_t)
-else
-    AC_MSG_ERROR([ptrdiff_t type is not available, this is required by C99 standard.  Cannot continue])
-fi
-
-AC_CHECK_SIZEOF(wchar_t)
-AC_CHECK_SIZEOF(pid_t)
-
-# Check sizes of atomic types so we can define fixed-width types in PRTE
-AC_CHECK_SIZEOF(atomic_short, [],[[#include <stdatomic.h>]])
-AC_CHECK_SIZEOF(atomic_int,[],[[#include <stdatomic.h>]])
-AC_CHECK_SIZEOF(atomic_long,[],[[#include <stdatomic.h>]])
-AC_CHECK_SIZEOF(atomic_llong,[],[[#include <stdatomic.h>]])
 
 #
 # Check for type alignments
@@ -420,48 +338,13 @@ AC_CHECK_SIZEOF(atomic_llong,[],[[#include <stdatomic.h>]])
 
 AC_CHECK_ALIGNOF(bool, [AC_INCLUDES_DEFAULT
                         #include <stdbool.h>])
-AC_CHECK_ALIGNOF(int8_t)
-AC_CHECK_ALIGNOF(int16_t)
 AC_CHECK_ALIGNOF(int32_t)
 AC_CHECK_ALIGNOF(int64_t)
-
-if test "$ac_cv_type_int128_t" = yes ; then
-  AC_CHECK_ALIGNOF(int128_t)
-fi
-
-AC_CHECK_ALIGNOF(char)
-AC_CHECK_ALIGNOF(short)
-AC_CHECK_ALIGNOF(wchar_t)
 AC_CHECK_ALIGNOF(int)
 AC_CHECK_ALIGNOF(long)
 AC_CHECK_ALIGNOF(long long)
-AC_CHECK_ALIGNOF(float)
 AC_CHECK_ALIGNOF(double)
-AC_CHECK_ALIGNOF(long double)
-if test "$ac_cv_type___float128" = yes; then
-    AC_CHECK_ALIGNOF(__float128)
-fi
-
-# We only need these types if we're building the OMPI project, but
-# PRTE currently doesn't protect for their lack of presence well.
-AC_CHECK_ALIGNOF(float _Complex)
-AC_CHECK_ALIGNOF(double _Complex)
-AC_CHECK_ALIGNOF(long double _Complex)
-
-AC_CHECK_ALIGNOF(void *)
 AC_CHECK_ALIGNOF(size_t)
-
-#
-# Check for other compiler characteristics
-#
-
-PRTE_C_WEAK_SYMBOLS
-PRTE_C_MACRO_WEAK_SYMBOLS
-
-
-if test "x$CC" = "xicc"; then
-    PRTE_CHECK_ICC_VARARGS
-fi
 
 # Check if we support the offsetof compiler directive
 PRTE_CHECK_OFFSETOF
@@ -474,6 +357,23 @@ prte_show_subtitle "Compiler characteristics"
 
 PRTE_CHECK_ATTRIBUTES
 PRTE_CHECK_COMPILER_VERSION_ID
+
+# PRTE only supports GCC >=v4.8.1.  Notes:
+#
+# 1. The default compiler that comes with RHEL 7 is v4.8.5
+#    (version ID 264197).
+# 2. We regularly test with GCC v4.8.1 (version ID 264193).
+# 3. GCC 4.8.0 probably also works; we just haven't tested it.
+#
+# Since we regularly test with 4.8.1, that's what we check for.
+AS_IF([test "$prte_cv_compiler_FAMILYNAME" = "GNU" && \
+           test "$prte_cv_compiler_VERSION" -lt 264193],
+      [AC_MSG_WARN([PRTE no longer supports versions of the GNU compiler suite])
+       AC_MSG_WARN([less than v4.8.1.])
+       AC_MSG_WARN([Please upgrade your GNU compiler suite, or use])
+       AC_MSG_WARN([a different compiler to build PRTE.])
+       AC_MSG_ERROR([Cannot continue])
+      ])
 
 ##################################
 # Assembler Configuration
@@ -489,51 +389,44 @@ PRTE_CONFIG_ASM
 
 prte_show_title "Header file tests"
 
-AC_CHECK_HEADERS([alloca.h aio.h arpa/inet.h dirent.h \
-    dlfcn.h endian.h execinfo.h err.h fcntl.h grp.h libgen.h \
-    libutil.h memory.h netdb.h netinet/in.h netinet/tcp.h \
-    poll.h pthread.h pty.h pwd.h sched.h \
-    strings.h stropts.h linux/ethtool.h linux/sockios.h \
-    sys/fcntl.h sys/ipc.h sys/shm.h \
-    sys/ioctl.h sys/mman.h sys/param.h sys/queue.h \
-    sys/resource.h sys/select.h sys/socket.h sys/sockio.h \
-    sys/stat.h sys/statfs.h sys/statvfs.h sys/time.h sys/tree.h \
-    sys/types.h sys/uio.h sys/un.h net/uio.h sys/utsname.h sys/vfs.h sys/wait.h syslog.h \
-    termios.h ulimit.h unistd.h util.h utmp.h malloc.h \
-    ifaddrs.h crt_externs.h regex.h mntent.h paths.h \
-    ioLib.h sockLib.h hostLib.h shlwapi.h sys/synch.h db.h ndbm.h ieee754.h])
+PRTE_VAR_SCOPE_PUSH(PRTE_CFLAGS_save_for_headers)
+PRTE_CFLAGS_save_for_headers=$CFLAGS
+_PRTE_CHECK_SPECIFIC_CFLAGS(-Werror, Werror)
 
-AC_CHECK_HEADERS([sys/mount.h], [], [],
-[AC_INCLUDES_DEFAULT
-#if HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif
-])
-
-AC_CHECK_HEADERS([sys/sysctl.h], [], [],
-[AC_INCLUDES_DEFAULT
-#if HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif
-])
+AC_CHECK_HEADERS([arpa/inet.h dirent.h \
+                  dlfcn.h endian.h execinfo.h fcntl.h \
+                  libutil.h netdb.h netinet/in.h netinet/tcp.h \
+                  poll.h  pty.h pwd.h sched.h \
+                  strings.h linux/ethtool.h linux/sockios.h \
+                  sys/fcntl.h \
+                  sys/ioctl.h sys/param.h sys/queue.h \
+                  sys/resource.h sys/select.h sys/socket.h \
+                  sys/stat.h sys/time.h \
+                  sys/types.h sys/uio.h sys/un.h net/uio.h sys/utsname.h sys/wait.h syslog.h \
+                  termios.h unistd.h util.h malloc.h \
+                  paths.h \
+                  ioLib.h sockLib.h hostLib.h])
 
 # Needed to work around Darwin requiring sys/socket.h for
 # net/if.h
 
 AC_CHECK_HEADERS([net/if.h], [], [],
-    [#include <stdio.h>
-#if STDC_HEADERS
-# include <stdlib.h>
-# include <stddef.h>
-#else
-# if HAVE_STDLIB_H
-#  include <stdlib.h>
-# endif
-#endif
-#if HAVE_SYS_SOCKET_H
-# include <sys/socket.h>
-#endif
-])
+                 [#include <stdio.h>
+                  #if STDC_HEADERS
+                  # include <stdlib.h>
+                  # include <stddef.h>
+                  #else
+                  # if HAVE_STDLIB_H
+                  #  include <stdlib.h>
+                  # endif
+                  #endif
+                  #if HAVE_SYS_SOCKET_H
+                  # include <sys/socket.h>
+                  #endif
+                 ])
+
+CFLAGS=$PRTE_CFLAGS_save_for_headers
+PRTE_VAR_SCOPE_POP
 
 # checkpoint results
 AC_CACHE_SAVE
@@ -614,110 +507,9 @@ AC_CHECK_DECLS([AF_UNSPEC, PF_UNSPEC, AF_INET6, PF_INET6],
 #include <netinet/in.h>
 #endif])
 
-# SA_RESTART in signal.h
-
-PRTE_VAR_SCOPE_PUSH([MSG])
-AC_MSG_CHECKING([if SA_RESTART defined in signal.h])
-AC_EGREP_CPP(yes, [
-#include <signal.h>
-#ifdef SA_RESTART
-    yes
-#endif ], [MSG=yes VALUE=1], [MSG=no VALUE=0])
-AC_DEFINE_UNQUOTED(PRTE_HAVE_SA_RESTART, $VALUE,
-    [Whether we have SA_RESTART in <signal.h> or not])
-AC_MSG_RESULT([$MSG])
-PRTE_VAR_SCOPE_POP
-
-AC_CHECK_MEMBERS([struct sockaddr.sa_len], [], [], [
-#include <sys/types.h>
-#if HAVE_SYS_SOCKET_H
-#include <sys/socket.h>
-#endif])
-
-AC_CHECK_MEMBERS([struct dirent.d_type], [], [], [
-#include <sys/types.h>
-#include <dirent.h>])
-
 AC_CHECK_MEMBERS([siginfo_t.si_fd],,,[#include <signal.h>])
 
 AC_CHECK_MEMBERS([siginfo_t.si_band],,,[#include <signal.h>])
-
-#
-# Checks for struct member names in struct statfs
-#
-
-AC_CHECK_MEMBERS([struct statfs.f_type], [], [], [
-AC_INCLUDES_DEFAULT
-#ifdef HAVE_SYS_VFS_H
-#include <sys/vfs.h>
-#endif
-#ifdef HAVE_SYS_STATFS_H
-#include <sys/statfs.h>
-#endif
-])
-
-AC_CHECK_MEMBERS([struct statfs.f_fstypename], [], [], [
-AC_INCLUDES_DEFAULT
-#ifdef HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif
-#ifdef HAVE_SYS_MOUNT_H
-#include <sys/mount.h>
-#endif
-#ifdef HAVE_SYS_VFS_H
-#include <sys/vfs.h>
-#endif
-#ifdef HAVE_SYS_STATFS_H
-#include <sys/statfs.h>
-#endif
-])
-
-#
-# Checks for struct member names in struct statvfs
-#
-
-AC_CHECK_MEMBERS([struct statvfs.f_basetype], [], [], [
-AC_INCLUDES_DEFAULT
-#ifdef HAVE_SYS_STATVFS_H
-#include <sys/statvfs.h>
-#endif
-])
-
-AC_CHECK_MEMBERS([struct statvfs.f_fstypename], [], [], [
-AC_INCLUDES_DEFAULT
-#ifdef HAVE_SYS_STATVFS_H
-#include <sys/statvfs.h>
-#endif
-])
-
-#
-# Check for ptrdiff type.  Yes, there are platforms where
-# sizeof(void*) != sizeof(long) (64 bit Windows, apparently).
-#
-
-AC_MSG_CHECKING([for pointer diff type])
-if test $ac_cv_type_ptrdiff_t = yes ; then
-    prte_ptrdiff_t="ptrdiff_t"
-    prte_ptrdiff_size=$ac_cv_sizeof_ptrdiff_t
-elif test $ac_cv_sizeof_void_p -eq $ac_cv_sizeof_long ; then
-    prte_ptrdiff_t="long"
-    prte_ptrdiff_size=$ac_cv_sizeof_long
-elif test $ac_cv_type_long_long = yes && test $ac_cv_sizeof_void_p -eq $ac_cv_sizeof_long_long ; then
-    prte_ptrdiff_t="long long"
-    prte_ptrdiff_size=$ac_cv_sizeof_long_long
-else
-    AC_MSG_ERROR([Could not find datatype to emulate ptrdiff_t.  Cannot continue])
-fi
-
-AC_DEFINE_UNQUOTED([PRTE_PTRDIFF_TYPE], [$prte_ptrdiff_t],
-    [type to use for ptrdiff_t])
-AC_MSG_RESULT([$prte_ptrdiff_t (size: $prte_ptrdiff_size)])
-
-#
-# Find corresponding types for MPI_Aint, MPI_Count, and MPI_Offset.
-# And if relevant, find the corresponding MPI_ADDRESS_KIND,
-# MPI_COUNT_KIND, and MPI_OFFSET_KIND.
-#
 
 # checkpoint results
 AC_CACHE_SAVE
@@ -746,9 +538,6 @@ PRTE_VAR_SCOPE_POP
 
 prte_show_title "Library and Function tests"
 
-# Darwin doesn't need -lutil, as it's something other than this -lutil.
-PRTE_SEARCH_LIBS_CORE([openpty], [util])
-
 PRTE_SEARCH_LIBS_CORE([gethostbyname], [nsl])
 
 PRTE_SEARCH_LIBS_CORE([socket], [socket])
@@ -756,23 +545,10 @@ PRTE_SEARCH_LIBS_CORE([socket], [socket])
 # Solaris has sched_yield in -lrt, usually in libc
 PRTE_SEARCH_LIBS_CORE([sched_yield], [rt])
 
-# IRIX and CentOS have dirname in -lgen, usually in libc
-PRTE_SEARCH_LIBS_CORE([dirname], [gen])
-
 # Darwin doesn't need -lm, as it's a symlink to libSystem.dylib
 PRTE_SEARCH_LIBS_CORE([ceil], [m])
 
-# -lrt might be needed for clock_gettime
-PRTE_SEARCH_LIBS_CORE([clock_gettime], [rt])
-
-AC_CHECK_FUNCS([asprintf snprintf vasprintf vsnprintf openpty isatty getpwuid fork waitpid execve pipe ptsname setsid mmap tcgetpgrp posix_memalign strsignal sysconf syslog vsyslog regcmp regexec regfree _NSGetEnviron socketpair strncpy_s usleep mkfifo dbopen dbm_open statfs statvfs setpgid setenv __malloc_initialize_hook])
-
-# Sanity check: ensure that we got at least one of statfs or statvfs.
-
-if test $ac_cv_func_statfs = no && test $ac_cv_func_statvfs = no; then
-    AC_MSG_WARN([neither statfs() and statvfs() were found])
-    AC_MSG_ERROR([Cannot continue])
-fi
+AC_CHECK_FUNCS([asprintf snprintf vasprintf vsnprintf fork  setsid strsignal syslog setpgid fileno_unlocked])
 
 # On some hosts, htonl is a define, so the AC_CHECK_FUNC will get
 # confused.  On others, it's in the standard library, but stubbed with
@@ -802,22 +578,6 @@ AS_IF([test "$prte_cv_htonl_define" = "yes" || test "$prte_have_htonl" = "yes"],
     [AC_DEFINE_UNQUOTED([HAVE_UNIX_BYTESWAP], [1],
         [whether unix byteswap routines -- htonl, htons, nothl, ntohs -- are available])])
 
-#
-# Make sure we can copy va_lists (need check declared, not linkable)
-#
-
-AC_CHECK_DECL(va_copy, PRTE_HAVE_VA_COPY=1, PRTE_HAVE_VA_COPY=0,
-    [#include <stdarg.h>])
-
-AC_DEFINE_UNQUOTED(PRTE_HAVE_VA_COPY, $PRTE_HAVE_VA_COPY,
-    [Whether we have va_copy or not])
-
-AC_CHECK_DECL(__va_copy, PRTE_HAVE_UNDERSCORE_VA_COPY=1,
-    PRTE_HAVE_UNDERSCORE_VA_COPY=0, [#include <stdarg.h>])
-
-AC_DEFINE_UNQUOTED(PRTE_HAVE_UNDERSCORE_VA_COPY, $PRTE_HAVE_UNDERSCORE_VA_COPY,
-    [Whether we have __va_copy or not])
-
 AC_CHECK_DECLS(__func__)
 
 # checkpoint results
@@ -829,30 +589,8 @@ AC_CACHE_SAVE
 
 prte_show_title "System-specific tests"
 
-# Do we have _SC_NPROCESSORS_ONLN? (only going to pass if we also have
-# <unistd.h> and sysconf(), which is ok) OS X 10.4 has <unistd.h> and
-# sysconf(), but does not have _SC_NPROCESSORS_ONLN.  Doh!
-
-AC_CACHE_CHECK([for _SC_NPROCESSORS_ONLN],
-  [ompi_cv_have__SC_NPROCESSORS_ONLN],
-  [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([
-AC_INCLUDES_DEFAULT
-#include <unistd.h>
-],
-     [int i = _SC_NPROCESSORS_ONLN;])],
-     [ompi_cv_have__SC_NPROCESSORS_ONLN="yes"],
-     [ompi_cv_have__SC_NPROCESSORS_ONLN="no"])])
-
-AS_IF([test "$ompi_cv_have__SC_NPROCESSORS_ONLN" = "yes"],
-      [result=1], [result=0])
-
-AC_DEFINE_UNQUOTED([PRTE_HAVE__SC_NPROCESSORS_ONLN], [$result],
-  [Define to 1 ifyou have the declaration of _SC_NPROCESSORS_ONLN, and to 0 otherwise])
-
 # all: endian
 AC_C_BIGENDIAN
-
-PRTE_CHECK_BROKEN_QSORT
 
 #
 # Check out what thread support we have
@@ -864,10 +602,6 @@ CFLAGS="$CFLAGS $THREAD_CFLAGS"
 LDFLAGS="$LDFLAGS $THREAD_LDFLAGS"
 LIBS="$LIBS $THREAD_LIBS"
 
-PRTE_WRAPPER_FLAGS_ADD([CFLAGS], [$THREAD_CFLAGS])
-PRTE_WRAPPER_FLAGS_ADD([LDFLAGS], [$THREAD_LDFLAGS])
-
-# no need to update WRAPPER_EXTRA_LIBS - we'll get it from LT later
 #
 # What is the local equivalent of "ln -s"
 #
@@ -875,6 +609,9 @@ PRTE_WRAPPER_FLAGS_ADD([LDFLAGS], [$THREAD_LDFLAGS])
 AC_PROG_LN_S
 AC_PROG_GREP
 AC_PROG_EGREP
+
+# This check must come after PRTE_CONFIG_THREADS
+AC_CHECK_FUNCS([pthread_setaffinity_np])
 
 #
 # We need as and lex
@@ -901,17 +638,6 @@ if test -z "$LEX" || \
         AC_MSG_ERROR([Cannot continue])
     fi
 fi
-
-#
-# Look for ps command and arguments
-#
-PRTE_PS_FLAVOR_CHECK
-
-#
-# File system case sensitivity
-#
-
-PRTE_CASE_SENSITIVE_FS_SETUP
 
 #
 # Do we have RLIMIT_NPROC in <sys/resources.h>? (e.g., Solaris does not)
@@ -989,22 +715,50 @@ AC_CACHE_SAVE
 ##################################
 # Libevent
 ##################################
+prte_show_title "Event libraries"
 
-prte_show_title "Configure event library support - libev"
+dnl Only one of Libev or Libevent can be used by PRTE.  The
+dnl selection logic for the two is:
+dnl
+dnl   * libev is used if explicitly requested
+dnl   * libevent is used if explicitly requested
+dnl   * if both are explicitly requested, then we report the error
+dnl     and abort
+dnl   * if neither is explicitly requested, then we default to
+dnl     using libevent if it is available. If libevent isn't
+dnl     available, then we see if libev is available.
+dnl
+dnl poking at $with_libevent and $with_libev is a bit of an
+dnl abstraction break, but makes implementing this logic
+dnl significantly easier.
+prte_libev_support=0
+prte_libevent_support=0
 
-PRTE_LIBEV_CONFIG
+AS_IF([test ! -z "$with_libevent" -a "$with_libevent" != "no"],
+      [want_libevent=1])
+AS_IF([test ! -z "$with_libev" -a "$with_libev" != "no"],
+      [want_libev=1])
 
-prte_show_title "Configure event library support - libevent"
-
-PRTE_LIBEVENT_CONFIG
-
-AS_IF([test $prte_libevent_support -eq 1 && test $prte_libev_support -eq 1],
+AS_IF([test "$want_libevent" = "1" -a "$want_libev" = "1"],
       [AC_MSG_WARN([Both libevent and libev support have been specified.])
        AC_MSG_WARN([Only one can be configured against at a time. Please])
        AC_MSG_WARN([remove one from the configure command line.])
        AC_MSG_ERROR([Cannot continue])])
 
-AS_IF([test $prte_libevent_support -eq 0 && test $prte_libev_support -eq 0],
+prte_found_event_lib=0
+dnl If libevent succeeds, then we don't need libev, but we skip
+dnl libevent if libev was explicitly requested.
+AS_IF([test "$want_libev" != "1"],
+      [PRTE_LIBEVENT_CONFIG([prte_found_event_lib=1])])
+AS_IF([test $prte_found_event_lib -eq 0],
+      [PRTE_LIBEV_CONFIG([prte_found_event_lib=1])])
+
+dnl The following must _always_ be defined, regardless of which
+dnl event library was selected/requested
+AC_DEFINE_UNQUOTED([PRTE_HAVE_LIBEV], [$prte_libev_support], [Whether we are building against libev])
+AC_DEFINE_UNQUOTED([PRTE_HAVE_LIBEVENT], [$prte_libevent_support], [Whether we are building against libevent])
+
+AS_IF([test $prte_found_event_lib -eq 0],
       [AC_MSG_WARN([Either libevent or libev support is required, but neither])
        AC_MSG_WARN([was found. Please use the configure options to point us])
        AC_MSG_WARN([to where we can find one or the other library])
@@ -1024,7 +778,7 @@ PRTE_CHECK_PMIX
 
 prte_show_title "Configure HWLOC"
 
-PRTE_HWLOC_CONFIG
+PRTE_SETUP_HWLOC
 
 ##################################
 # MCA
@@ -1157,14 +911,8 @@ LIBS="$LIBS $PRTE_FINAL_LIBS"
 # restore any user-provided Werror flags
 AS_IF([test ! -z "$PRTE_CFLAGS_cache"], [CFLAGS="$CFLAGS $PRTE_CFLAGS_cache"])
 
-# Delay setting pickyness until here so we
-# don't break configure code tests
-#if test "$WANT_PICKY_COMPILER" = "1"; then
-#    CFLAGS="$CFLAGS -Wall -Wextra -Werror"
-#fi
-
-# Cleanup duplicate flags
-PRTE_FLAGS_UNIQ(CFLAGS)
+# setup "picky" compiler options if enabled
+PRTE_SETUP_PICKY_COMPILERS
 
 #
 # Delayed the substitution of CFLAGS and CXXFLAGS until now because
@@ -1172,28 +920,28 @@ PRTE_FLAGS_UNIQ(CFLAGS)
 #
 
 AC_SUBST(CFLAGS)
+AC_SUBST(CPPFLAGS)
+
+AC_MSG_CHECKING([final CPPFLAGS])
+AC_MSG_RESULT([$CPPFLAGS])
+
+AC_MSG_CHECKING([final CFLAGS])
+AC_MSG_RESULT([$CFLAGS])
+
+AC_MSG_CHECKING([final LDFLAGS])
+AC_MSG_RESULT([$LDFLAGS])
+
+AC_MSG_CHECKING([final LIBS])
+AC_MSG_RESULT([$LIBS])
+
 
 #
 # Aggregate MCA parameters directory
 #
 AC_SUBST([AMCA_PARAM_SETS_DIR], ['$(prtedatadir)/amca-param-sets'])
 
-############################################################################
-# final wrapper compiler config
-############################################################################
-prte_show_subtitle "Wrapper compiler final setup"
-
-PRTE_SETUP_WRAPPER_FINAL
-
 # If there is a local hook, call it.
 m4_ifdef([prte_CONFIG_LOCAL], [prte_CONFIG_LOCAL])
-
-############################################################################
-# Check for building man pages
-############################################################################
-prte_show_subtitle "Man page setup"
-PRTE_SETUP_MAN_PAGES
-
 
 ############################################################################
 # Party on
@@ -1239,8 +987,6 @@ AC_CONFIG_FILES([
 ])
 
 PRTE_CONFIG_FILES
-
-PRTE_CHECK_LIBNL_SUMMARY
 
 AC_OUTPUT
 

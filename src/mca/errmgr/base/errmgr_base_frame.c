@@ -16,7 +16,7 @@
  * Copyright (c) 2014-2019 Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -35,22 +35,25 @@
 #    include <sys/types.h>
 #endif
 
+#include "src/class/pmix_list.h"
 #include "src/mca/base/base.h"
 #include "src/mca/mca.h"
 
 #include "src/util/output.h"
-#include "src/util/prte_environ.h"
+#include "src/util/pmix_environ.h"
 
 #include "src/mca/errmgr/base/base.h"
 #include "src/mca/errmgr/base/errmgr_private.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/mca/errmgr/base/static-components.h"
 
 /*
  * Globals
  */
-prte_errmgr_base_t prte_errmgr_base = {{{0}}};
+prte_errmgr_base_t prte_errmgr_base = {
+    .error_cbacks = PMIX_LIST_STATIC_INIT
+};
 
 /* Public module provides a wrapper around previous functions */
 prte_errmgr_base_module_t prte_errmgr_default_fns = {.init = NULL,     /* init     */
@@ -78,7 +81,7 @@ static int prte_errmgr_base_close(void)
     prte_errmgr = prte_errmgr_default_fns;
 
     /* destruct the callback list */
-    PRTE_LIST_DESTRUCT(&prte_errmgr_base.error_cbacks);
+    PMIX_LIST_DESTRUCT(&prte_errmgr_base.error_cbacks);
 
     return prte_mca_base_framework_components_close(&prte_errmgr_base_framework, NULL);
 }
@@ -93,7 +96,7 @@ static int prte_errmgr_base_open(prte_mca_base_open_flag_t flags)
     prte_errmgr = prte_errmgr_default_fns;
 
     /* initialize the error callback list */
-    PRTE_CONSTRUCT(&prte_errmgr_base.error_cbacks, prte_list_t);
+    PMIX_CONSTRUCT(&prte_errmgr_base.error_cbacks, pmix_list_t);
 
     /* Open up all available components */
     return prte_mca_base_framework_components_open(&prte_errmgr_base_framework, flags);

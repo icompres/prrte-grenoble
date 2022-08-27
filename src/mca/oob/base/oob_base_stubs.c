@@ -4,7 +4,7 @@
  *                         reserved.
  * Copyright (c) 2013-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -16,17 +16,18 @@
 #include "constants.h"
 
 #include "src/pmix/pmix-internal.h"
-#include "src/util/argv.h"
+#include "src/runtime/prte_globals.h"
+#include "src/util/pmix_argv.h"
 #include "src/util/output.h"
-#include "src/util/printf.h"
+#include "src/util/pmix_printf.h"
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/oob/base/base.h"
-#include "src/mca/rml/rml.h"
+#include "src/rml/rml.h"
 #include "src/mca/state/state.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 
-static void process_uri(char *uri);
+static prte_oob_base_peer_t* process_uri(char *uri);
 
 void prte_oob_base_send_nb(int fd, short args, void *cbdata)
 {
@@ -39,12 +40,13 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
     prte_oob_base_component_t *component;
     bool reachable;
     char *uri;
+    PRTE_HIDE_UNUSED_PARAMS(fd, args);
 
-    PRTE_ACQUIRE_OBJECT(cd);
+    PMIX_ACQUIRE_OBJECT(cd);
 
     /* done with this. release it now */
     msg = cd->msg;
-    PRTE_RELEASE(cd);
+    PMIX_RELEASE(cd);
 
     prte_output_verbose(5, prte_oob_base_framework.framework_output,
                         "%s oob:base:send to target %s - attempt %u",
@@ -63,8 +65,14 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
     /* check if we have this peer in our list */
     pr = prte_oob_base_get_peer(&msg->dst);
     if (NULL == pr) {
+        /* if we are abnormally terminating, or terminating the DVM, then
+         * don't bother looking for it */
+        if (prte_abnormal_term_ordered || prte_never_launched || prte_job_term_ordered) {
+            return;
+        }
         prte_output_verbose(5, prte_oob_base_framework.framework_output,
-                            "%s oob:base:send unknown peer %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                            "%s oob:base:send unknown peer %s",
+                            PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                             PRTE_NAME_PRINT(&msg->dst));
         /* for direct launched procs, the URI might be in the database,
          * so check there next - if it is, the peer object will be added
@@ -74,8 +82,7 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
         PRTE_MODEX_RECV_VALUE_OPTIONAL(rc, PMIX_PROC_URI, &msg->dst, (char **) &uri, PMIX_STRING);
         if (PRTE_SUCCESS == rc) {
             if (NULL != uri) {
-                process_uri(uri);
-                pr = prte_oob_base_get_peer(&msg->dst);
+                pr = process_uri(uri);
                 if (NULL == pr) {
                     /* that is just plain wrong */
                     prte_output_verbose(5, prte_oob_base_framework.framework_output,
@@ -100,7 +107,7 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
              */
             reachable = false;
             pr = NULL;
-            PRTE_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
+            PMIX_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
             {
                 component = (prte_oob_base_component_t *) cli->cli_component;
                 if (NULL != component->is_reachable) {
@@ -109,11 +116,12 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
                          * so we don't waste this time again
                          */
                         if (NULL == pr) {
-                            pr = PRTE_NEW(prte_oob_base_peer_t);
+                            pr = PMIX_NEW(prte_oob_base_peer_t);
                             PMIX_XFER_PROCID(&pr->name, &msg->dst);
+                            pmix_list_append(&prte_oob_base.peers, &pr->super);
                         }
                         /* mark that this component can reach the peer */
-                        prte_bitmap_set_bit(&pr->addressable, component->idx);
+                        pmix_bitmap_set_bit(&pr->addressable, component->idx);
                         /* flag that at least one component can reach this peer */
                         reachable = true;
                     }
@@ -157,7 +165,7 @@ void prte_oob_base_send_nb(int fd, short args, void *cbdata)
      * Let it try to make the connection
      */
     msg_sent = false;
-    PRTE_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
+    PMIX_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
     {
         component = (prte_oob_base_component_t *) cli->cli_component;
         /* is this peer reachable via this component? */
@@ -217,12 +225,11 @@ void prte_oob_base_get_addr(char **uri)
     bool one_added = false;
     prte_mca_base_component_list_item_t *cli;
     prte_oob_base_component_t *component;
-    pmix_value_t val;
     pmix_status_t rc;
 
     /* start with our process name */
-    if (PRTE_SUCCESS
-        != (rc = prte_util_convert_process_name_to_string(&final, PRTE_PROC_MY_NAME))) {
+    rc = prte_util_convert_process_name_to_string(&final, PRTE_PROC_MY_NAME);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
         *uri = NULL;
         return;
@@ -232,7 +239,7 @@ void prte_oob_base_get_addr(char **uri)
     /* loop across all available modules to get their input
      * up to the max length
      */
-    PRTE_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
+    PMIX_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
     {
         component = (prte_oob_base_component_t *) cli->cli_component;
         /* ask the component for its input, obtained when it
@@ -256,7 +263,7 @@ void prte_oob_base_get_addr(char **uri)
                 continue;
             }
             /* add new value to final one */
-            prte_asprintf(&tmp, "%s;%s", final, turi);
+            pmix_asprintf(&tmp, "%s;%s", final, turi);
             free(turi);
             free(final);
             final = tmp;
@@ -275,16 +282,9 @@ void prte_oob_base_get_addr(char **uri)
     }
 
     *uri = final;
-    /* push this into our modex storage */
-    PMIX_VALUE_LOAD(&val, final, PMIX_STRING);
-    if (PMIX_SUCCESS
-        != (rc = PMIx_Store_internal(&prte_process_info.myproc, PMIX_PROC_URI, &val))) {
-        PMIX_ERROR_LOG(rc);
-    }
-    PMIX_VALUE_DESTRUCT(&val);
 }
 
-static void process_uri(char *uri)
+static prte_oob_base_peer_t* process_uri(char *uri)
 {
     pmix_proc_t peer;
     char *cptr;
@@ -294,7 +294,8 @@ static void process_uri(char *uri)
     prte_oob_base_peer_t *pr;
 
     prte_output_verbose(5, prte_oob_base_framework.framework_output,
-                        "%s:set_addr processing uri %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), uri);
+                        "%s:set_addr processing uri %s",
+                        PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), uri);
 
     /* find the first semi-colon in the string */
     cptr = strchr(uri, ';');
@@ -304,11 +305,10 @@ static void process_uri(char *uri)
          * and all others containing the OOB contact info
          */
         PRTE_ERROR_LOG(PRTE_ERR_BAD_PARAM);
-        return;
+        return NULL;
     }
     *cptr = '\0';
     cptr++;
-
     /* the first field is the process name, so convert it */
     prte_util_convert_string_to_process_name(&peer, uri);
 
@@ -317,20 +317,21 @@ static void process_uri(char *uri)
      */
     if (PMIX_CHECK_PROCID(&peer, PRTE_PROC_MY_NAME)) {
         prte_output_verbose(5, prte_oob_base_framework.framework_output,
-                            "%s:set_addr peer %s is me", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                            "%s:set_addr peer %s is me",
+                            PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                             PRTE_NAME_PRINT(&peer));
-        return;
+        return NULL;
     }
 
     /* split the rest of the uri into component parts */
-    uris = prte_argv_split(cptr, ';');
+    uris = pmix_argv_split(cptr, ';');
 
     /* get the peer object for this process */
     pr = prte_oob_base_get_peer(&peer);
     if (NULL == pr) {
-        pr = PRTE_NEW(prte_oob_base_peer_t);
+        pr = PMIX_NEW(prte_oob_base_peer_t);
         PMIX_XFER_PROCID(&pr->name, &peer);
-        prte_list_append(&prte_oob_base.peers, &pr->super);
+        pmix_list_append(&prte_oob_base.peers, &pr->super);
     }
 
     /* loop across all available components and let them extract
@@ -338,7 +339,7 @@ static void process_uri(char *uri)
      * are all operating on our event base, so we can just
      * directly call their functions
      */
-    PRTE_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
+    PMIX_LIST_FOREACH(cli, &prte_oob_base.actives, prte_mca_base_component_list_item_t)
     {
         component = (prte_oob_base_component_t *) cli->cli_component;
         prte_output_verbose(5, prte_oob_base_framework.framework_output,
@@ -354,7 +355,7 @@ static void process_uri(char *uri)
                                     "%s: peer %s is reachable via component %s",
                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&peer),
                                     component->oob_base.mca_component_name);
-                prte_bitmap_set_bit(&pr->addressable, component->idx);
+                pmix_bitmap_set_bit(&pr->addressable, component->idx);
             } else {
                 prte_output_verbose(5, prte_oob_base_framework.framework_output,
                                     "%s: peer %s is NOT reachable via component %s",
@@ -363,14 +364,15 @@ static void process_uri(char *uri)
             }
         }
     }
-    prte_argv_free(uris);
+    pmix_argv_free(uris);
+    return pr;
 }
 
 prte_oob_base_peer_t *prte_oob_base_get_peer(const pmix_proc_t *pr)
 {
     prte_oob_base_peer_t *peer;
 
-    PRTE_LIST_FOREACH(peer, &prte_oob_base.peers, prte_oob_base_peer_t)
+    PMIX_LIST_FOREACH(peer, &prte_oob_base.peers, prte_oob_base_peer_t)
     {
         if (PMIX_CHECK_PROCID(pr, &peer->name)) {
             return peer;

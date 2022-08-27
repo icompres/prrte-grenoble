@@ -13,7 +13,7 @@
  * Copyright (c) 2011-2013 Los Alamos National Security, LLC.
  *                         All rights reserved.
  * Copyright (c) 2014-2020 Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -26,12 +26,12 @@
 
 #include <sys/types.h>
 
-#include "src/class/prte_pointer_array.h"
+#include "src/class/pmix_pointer_array.h"
 #include "src/hwloc/hwloc-internal.h"
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/rmaps/rmaps_types.h"
 #include "src/pmix/pmix-internal.h"
-#include "src/util/argv.h"
+#include "src/util/pmix_argv.h"
 
 #include "src/runtime/prte_globals.h"
 
@@ -49,7 +49,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
     prte_app_context_t *app;
     prte_proc_t *proc;
     prte_attribute_t *kv;
-    prte_list_t *cache;
+    pmix_list_t *cache;
     prte_info_item_t *val;
 
     /* pack the nspace */
@@ -67,7 +67,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
 
     /* pack the attributes that need to be sent */
     count = 0;
-    PRTE_LIST_FOREACH(kv, &job->attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, &job->attributes, prte_attribute_t)
     {
         if (PRTE_ATTR_GLOBAL == kv->local) {
             ++count;
@@ -78,7 +78,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
         PMIX_ERROR_LOG(rc);
         return prte_pmix_convert_status(rc);
     }
-    PRTE_LIST_FOREACH(kv, &job->attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, &job->attributes, prte_attribute_t)
     {
         if (PRTE_ATTR_GLOBAL == kv->local) {
             rc = PMIx_Data_pack(NULL, bkt, (void *) &kv->key, 1, PMIX_UINT16);
@@ -100,14 +100,14 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
         /* we need to pack these as well, but they are composed
          * of prte_info_item_t's on a list. So first pack the number
          * of list elements */
-        count = prte_list_get_size(cache);
+        count = pmix_list_get_size(cache);
         rc = PMIx_Data_pack(NULL, bkt, (void *) &count, 1, PMIX_INT32);
         if (PMIX_SUCCESS != rc) {
             PMIX_ERROR_LOG(rc);
             return prte_pmix_convert_status(rc);
         }
         /* now pack each element on the list */
-        PRTE_LIST_FOREACH(val, cache, prte_info_item_t)
+        PMIX_LIST_FOREACH(val, cache, prte_info_item_t)
         {
             rc = PMIx_Data_pack(NULL, bkt, (void *) &val->info, 1, PMIX_INFO);
             if (PMIX_SUCCESS != rc) {
@@ -126,7 +126,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
     }
 
     /* pack the personality */
-    count = prte_argv_count(job->personality);
+    count = pmix_argv_count(job->personality);
     rc = PMIx_Data_pack(NULL, bkt, (void *) &count, 1, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
@@ -150,7 +150,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
     /* if there are apps, pack the app_contexts */
     if (0 < job->num_apps) {
         for (j = 0; j < job->apps->size; j++) {
-            if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(job->apps, j))) {
+            if (NULL == (app = (prte_app_context_t *) pmix_pointer_array_get_item(job->apps, j))) {
                 continue;
             }
             rc = prte_app_pack(bkt, app);
@@ -174,18 +174,14 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
     }
 
     if (0 < job->num_procs) {
-        /* check attributes to see if this job is to be fully
-         * described in the launch msg */
-        if (prte_get_attribute(&job->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-            for (j = 0; j < job->procs->size; j++) {
-                if (NULL == (proc = (prte_proc_t *) prte_pointer_array_get_item(job->procs, j))) {
-                    continue;
-                }
-                rc = prte_proc_pack(bkt, proc);
-                if (PMIX_SUCCESS != rc) {
-                    PMIX_ERROR_LOG(rc);
-                    return prte_pmix_convert_status(rc);
-                }
+        for (j = 0; j < job->procs->size; j++) {
+            if (NULL == (proc = (prte_proc_t *) pmix_pointer_array_get_item(job->procs, j))) {
+                continue;
+            }
+            rc = prte_proc_pack(bkt, proc);
+            if (PMIX_SUCCESS != rc) {
+                PMIX_ERROR_LOG(rc);
+                return prte_pmix_convert_status(rc);
             }
         }
     }
@@ -307,7 +303,7 @@ int prte_node_pack(pmix_data_buffer_t *bkt, prte_node_t *node)
 
     /* pack any shared attributes */
     count = 0;
-    PRTE_LIST_FOREACH(kv, &node->attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, &node->attributes, prte_attribute_t)
     {
         if (PRTE_ATTR_GLOBAL == kv->local) {
             ++count;
@@ -319,7 +315,7 @@ int prte_node_pack(pmix_data_buffer_t *bkt, prte_node_t *node)
         return prte_pmix_convert_status(rc);
     }
     if (0 < count) {
-        PRTE_LIST_FOREACH(kv, &node->attributes, prte_attribute_t)
+        PMIX_LIST_FOREACH(kv, &node->attributes, prte_attribute_t)
         {
             if (PRTE_ATTR_GLOBAL == kv->local) {
                 rc = PMIx_Data_pack(NULL, bkt, (void *) &kv->key, 1, PMIX_UINT16);
@@ -395,9 +391,16 @@ int prte_proc_pack(pmix_data_buffer_t *bkt, prte_proc_t *proc)
         return prte_pmix_convert_status(rc);
     }
 
+    /* pack the cpuset */
+    rc = PMIx_Data_pack(NULL, bkt, (void *) &proc->cpuset, 1, PMIX_STRING);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        return prte_pmix_convert_status(rc);
+    }
+
     /* pack the attributes that will go */
     count = 0;
-    PRTE_LIST_FOREACH(kv, &proc->attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, &proc->attributes, prte_attribute_t)
     {
         if (PRTE_ATTR_GLOBAL == kv->local) {
             ++count;
@@ -409,7 +412,7 @@ int prte_proc_pack(pmix_data_buffer_t *bkt, prte_proc_t *proc)
         return prte_pmix_convert_status(rc);
     }
     if (0 < count) {
-        PRTE_LIST_FOREACH(kv, &proc->attributes, prte_attribute_t)
+        PMIX_LIST_FOREACH(kv, &proc->attributes, prte_attribute_t)
         {
             if (PRTE_ATTR_GLOBAL == kv->local) {
                 rc = PMIx_Data_pack(NULL, bkt, (void *) &kv->key, 1, PMIX_UINT16);
@@ -467,7 +470,7 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
     }
 
     /* pack the number of entries in the argv array */
-    count = prte_argv_count(app->argv);
+    count = pmix_argv_count(app->argv);
     rc = PMIx_Data_pack(NULL, bkt, &count, 1, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
@@ -484,7 +487,7 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
     }
 
     /* pack the number of entries in the enviro array */
-    count = prte_argv_count(app->env);
+    count = pmix_argv_count(app->env);
     rc = PMIx_Data_pack(NULL, bkt, &count, 1, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
@@ -507,9 +510,16 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
         return prte_pmix_convert_status(rc);
     }
 
+    /* pack the flags */
+    rc = PMIx_Data_pack(NULL, bkt, &app->flags, 1, PMIX_INT8);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        return prte_pmix_convert_status(rc);
+    }
+
     /* pack attributes */
     count = 0;
-    PRTE_LIST_FOREACH(kv, &app->attributes, prte_attribute_t)
+    PMIX_LIST_FOREACH(kv, &app->attributes, prte_attribute_t)
     {
         if (PRTE_ATTR_GLOBAL == kv->local) {
             ++count;
@@ -521,7 +531,7 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
         return prte_pmix_convert_status(rc);
     }
     if (0 < count) {
-        PRTE_LIST_FOREACH(kv, &app->attributes, prte_attribute_t)
+        PMIX_LIST_FOREACH(kv, &app->attributes, prte_attribute_t)
         {
             if (PRTE_ATTR_GLOBAL == kv->local) {
                 rc = PMIx_Data_pack(NULL, bkt, (void *) &kv->key, 1, PMIX_UINT16);

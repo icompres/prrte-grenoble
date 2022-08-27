@@ -4,7 +4,7 @@
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2016-2020 Cisco Systems, Inc.  All rights reserved
  * Copyright (c) 2019      Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -39,9 +39,10 @@
 #    include <linux/sockios.h>
 #endif
 
+#include "src/runtime/prte_globals.h"
 #include "src/util/ethtool.h"
-#include "src/util/if.h"
-#include "src/util/string_copy.h"
+#include "src/util/pmix_if.h"
+#include "src/util/pmix_string_copy.h"
 
 /*
  * Obtain an appropriate bandwidth for the interface if_name. On Linux, we
@@ -61,11 +62,11 @@ unsigned int prte_ethtool_get_speed(const char *if_name)
 
     sockfd = socket(PF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
-        goto out;
+        return 0;
     }
 
     memset(&ifr, 0, sizeof(struct ifreq));
-    prte_string_copy(ifr.ifr_name, if_name, PRTE_IF_NAMESIZE);
+    pmix_string_copy(ifr.ifr_name, if_name, PMIX_IF_NAMESIZE);
     ifr.ifr_data = (char *) &edata;
 
     if (ioctl(sockfd, SIOCETHTOOL, &ifr) < 0) {
@@ -85,6 +86,8 @@ unsigned int prte_ethtool_get_speed(const char *if_name)
 
 out:
     close(sockfd);
+#else
+    PRTE_HIDE_UNUSED_PARAMS(if_name);
 #endif
 
     return speed;

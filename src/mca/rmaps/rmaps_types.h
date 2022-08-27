@@ -13,7 +13,7 @@
  * Copyright (c) 2012-2015 Los Alamos National Security, LLC. All rights
  *                         reserved.
  * Copyright (c) 2014-2020 Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -29,7 +29,7 @@
 #include "prte_config.h"
 #include "constants.h"
 
-#include "src/class/prte_pointer_array.h"
+#include "src/class/pmix_pointer_array.h"
 #include "src/hwloc/hwloc-internal.h"
 
 #include "src/runtime/prte_globals.h"
@@ -50,13 +50,14 @@ typedef uint16_t prte_ranking_policy_t;
  * allocated set of resources.
  */
 struct prte_job_map_t {
-    prte_object_t super;
+    pmix_object_t super;
     /* user-specified mapping params */
     char *req_mapper;  /* requested mapper */
     char *last_mapper; /* last mapper used */
     prte_mapping_policy_t mapping;
     prte_ranking_policy_t ranking;
     prte_binding_policy_t binding;
+    bool rtos_set;
     /* *** */
     /* number of new daemons required to be launched
      * to support this job map
@@ -69,23 +70,67 @@ struct prte_job_map_t {
     /* number of nodes participating in this job */
     int32_t num_nodes;
     /* array of pointers to nodes in this map for this job */
-    prte_pointer_array_t *nodes;
+    pmix_pointer_array_t *nodes;
 };
 typedef struct prte_job_map_t prte_job_map_t;
-PRTE_EXPORT PRTE_CLASS_DECLARATION(prte_job_map_t);
+PRTE_EXPORT PMIX_CLASS_DECLARATION(prte_job_map_t);
 
-/**
+typedef struct {
+    /* input info */
+    uint16_t cpus_per_rank;
+    bool use_hwthreads;
+    int stream;
+    int verbosity;
+    char *cpuset;
+    hwloc_cpuset_t job_cpuset;
+    bool bindsupport;
+    bool donotlaunch;
+    bool membind_warned;
+    bool oversubscribe;
+    bool overload;
+
+    /* mapping values */
+    prte_mapping_policy_t map;
+    bool mapspan;
+    bool ordered;
+    prte_binding_policy_t mapdepth;
+    unsigned ncpus;
+    int nprocs;
+    hwloc_obj_type_t maptype;
+    unsigned cmaplvl;
+
+    /* ranking values */
+    prte_ranking_policy_t rank;
+    bool userranked;
+    unsigned nnodes;
+    unsigned total_nobjs;
+    unsigned nobjs;
+
+    /* binding values */
+    prte_binding_policy_t bind;
+    bool dobind;
+    hwloc_obj_type_t hwb;
+    unsigned clvl;
+
+    /* usage tracking */
+    hwloc_cpuset_t target;
+    hwloc_obj_t obj;
+
+} prte_rmaps_options_t;
+
+
+/*
+ **
  * Macro for use in components that are of type rmaps
  */
-#define PRTE_RMAPS_BASE_VERSION_2_0_0 PRTE_MCA_BASE_VERSION_2_1_0("rmaps", 2, 0, 0)
+#define PRTE_RMAPS_BASE_VERSION_4_0_0 PRTE_MCA_BASE_VERSION_2_1_0("rmaps", 4, 0, 0)
 
 /* define map-related directives */
 #define PRTE_MAPPING_NO_USE_LOCAL     0x0100
 #define PRTE_MAPPING_NO_OVERSUBSCRIBE 0x0200
 #define PRTE_MAPPING_SUBSCRIBE_GIVEN  0x0400
 #define PRTE_MAPPING_SPAN             0x0800
-/* an error flag */
-#define PRTE_MAPPING_CONFLICTED 0x1000
+#define PRTE_MAPPING_ORDERED          0x1000
 /* directives given */
 #define PRTE_MAPPING_LOCAL_GIVEN 0x2000
 #define PRTE_MAPPING_GIVEN       0x4000
@@ -99,27 +144,28 @@ PRTE_EXPORT PRTE_CLASS_DECLARATION(prte_job_map_t);
  * so the values match the corresponding
  * levels in src/hwloc/hwloc-internal.h
  */
-#define PRTE_MAPPING_BYNODE     1
-#define PRTE_MAPPING_BYPACKAGE  2
-#define PRTE_MAPPING_BYL3CACHE  3
-#define PRTE_MAPPING_BYL2CACHE  4
-#define PRTE_MAPPING_BYL1CACHE  5
-#define PRTE_MAPPING_BYCORE     6
-#define PRTE_MAPPING_BYHWTHREAD 7
+#define PRTE_MAPPING_BYNODE      1
+#define PRTE_MAPPING_BYNUMA      2
+#define PRTE_MAPPING_BYPACKAGE   3
+#define PRTE_MAPPING_BYL3CACHE   4
+#define PRTE_MAPPING_BYL2CACHE   5
+#define PRTE_MAPPING_BYL1CACHE   6
+#define PRTE_MAPPING_BYCORE      7
+#define PRTE_MAPPING_BYHWTHREAD  8
 /* now take the other round-robin options */
-#define PRTE_MAPPING_BYSLOT 8
-#define PRTE_MAPPING_BYDIST 9
+#define PRTE_MAPPING_BYSLOT      9
+#define PRTE_MAPPING_BYDIST     10
+#define PRTE_MAPPING_PELIST     11
 /* convenience - declare anything <= 15 to be round-robin*/
-#define PRTE_MAPPING_RR 16
+#define PRTE_MAPPING_RR         16
 
 /* sequential policy */
-#define PRTE_MAPPING_SEQ 20
-/* staged execution mapping */
-#define PRTE_MAPPING_STAGED 21
+#define PRTE_MAPPING_SEQ        20
+#define PRTE_MAPPING_COLOCATE   21
 /* rank file and other user-defined mapping */
-#define PRTE_MAPPING_BYUSER 22
+#define PRTE_MAPPING_BYUSER     22
 /* pattern-based mapping */
-#define PRTE_MAPPING_PPR 23
+#define PRTE_MAPPING_PPR        23
 /* macro to separate out the mapping policy
  * from the directives
  */
@@ -129,22 +175,18 @@ PRTE_EXPORT PRTE_CLASS_DECLARATION(prte_job_map_t);
 #define PRTE_SET_MAPPING_POLICY(target, pol) (target) = (pol) | ((target) &0xff00)
 
 /* define ranking directives */
-#define PRTE_RANKING_SPAN                         0x1000
-#define PRTE_RANKING_FILL                         0x2000
-#define PRTE_RANKING_GIVEN                        0x4000
+#define PRTE_RANKING_GIVEN                        0x1000
 #define PRTE_SET_RANKING_DIRECTIVE(target, pol)   (target) |= (pol)
 #define PRTE_UNSET_RANKING_DIRECTIVE(target, pol) (target) &= ~(pol)
 #define PRTE_GET_RANKING_DIRECTIVE(pol)           ((pol) &0xf000)
 
 /* define ranking policies */
 #define PRTE_RANK_BY_NODE            1
-#define PRTE_RANK_BY_PACKAGE         2
-#define PRTE_RANK_BY_L3CACHE         3
-#define PRTE_RANK_BY_L2CACHE         4
-#define PRTE_RANK_BY_L1CACHE         5
-#define PRTE_RANK_BY_CORE            6
-#define PRTE_RANK_BY_HWTHREAD        7
-#define PRTE_RANK_BY_SLOT            8
+#define PRTE_RANK_BY_SLOT            2
+#define PRTE_RANK_BY_FILL            3
+#define PRTE_RANK_BY_SPAN            4
+#define PRTE_RANKING_BYUSER          5
+
 #define PRTE_GET_RANKING_POLICY(pol) ((pol) &0x0fff)
 /* macro to determine if ranking policy is set */
 #define PRTE_RANKING_POLICY_IS_SET(pol)      ((pol) &0x0fff)

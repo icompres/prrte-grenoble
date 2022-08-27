@@ -15,7 +15,7 @@
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2018-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2021      IBM Corporation.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -30,7 +30,8 @@
 
 #include "src/include/version.h"
 #include "src/mca/base/base.h"
-#include "src/util/printf.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_printf.h"
 
 #include "pmix.h"
 #include "src/tools/prte_info/pinfo.h"
@@ -68,17 +69,17 @@ void prte_info_show_prte_version(const char *scope)
 {
     char *tmp, *tmp2;
 
-    prte_asprintf(&tmp, "%s:version:full", prte_info_type_prte);
-    tmp2 = make_version_str(scope, PRTE_MAJOR_VERSION, PRTE_MINOR_VERSION, PRTE_RELEASE_VERSION,
+    pmix_asprintf(&tmp, "%s:version:full", prte_info_type_prte);
+    tmp2 = make_version_str(scope, PRTE_MAJOR_VERSION, PRTE_MINOR_VERSION, PMIX_RELEASE_VERSION,
                             PRTE_GREEK_VERSION, PRTE_REPO_REV);
     prte_info_out("PRTE", tmp, tmp2);
     free(tmp);
     free(tmp2);
-    prte_asprintf(&tmp, "%s:version:repo", prte_info_type_prte);
+    pmix_asprintf(&tmp, "%s:version:repo", prte_info_type_prte);
     prte_info_out("PRTE repo revision", tmp, PRTE_REPO_REV);
     free(tmp);
-    prte_asprintf(&tmp, "%s:version:release_date", prte_info_type_prte);
-    prte_info_out("PRTE release date", tmp, PRTE_RELEASE_DATE);
+    pmix_asprintf(&tmp, "%s:version:release_date", prte_info_type_prte);
+    prte_info_out("PRTE release date", tmp, PMIX_RELEASE_DATE);
     free(tmp);
 
     prte_info_out("PMIx", "pmix:version:full", PMIx_Get_version());
@@ -93,33 +94,41 @@ void prte_info_show_prte_version(const char *scope)
  *      - want_all: True if all components' info is required.
  *      - cmd_line: The constructed command line argument
  */
-void prte_info_do_version(bool want_all, prte_cmd_line_t *cmd_line)
+void prte_info_do_version(bool want_all)
 {
-    unsigned int count;
-    size_t i;
-    char *arg1, *scope, *type, *component;
-    char *pos;
+    size_t i, n;
+    char *arg1, *scope, **tmp;
+    char *pos = NULL;
     int j;
-    prte_value_t *pval;
+    pmix_cli_item_t *opt;
 
     prte_info_components_open();
 
     if (want_all) {
         prte_info_show_prte_version(prte_info_ver_full);
         for (j = 0; j < mca_types.size; ++j) {
-            if (NULL == (pos = (char *) prte_pointer_array_get_item(&mca_types, j))) {
+            if (NULL == (pos = (char *) pmix_pointer_array_get_item(&mca_types, j))) {
                 continue;
             }
             prte_info_show_component_version(pos, prte_info_component_all, prte_info_ver_full,
                                              prte_info_type_all);
         }
     } else {
-        count = prte_cmd_line_get_ninsts(cmd_line, "show-version");
-        for (i = 0; i < count; ++i) {
-            pval = prte_cmd_line_get_param(cmd_line, "show-version", (int) i, 0);
-            arg1 = pval->value.data.string;
-            pval = prte_cmd_line_get_param(cmd_line, "show-version", (int) i, 1);
-            scope = pval->value.data.string;
+        opt = pmix_cmd_line_get_param(&prte_info_cmd_line, "show-version");
+        if (NULL != opt) {
+            tmp = pmix_argv_split(opt->values[0], ':');
+            arg1 = tmp[0];
+            if (NULL == tmp[1]) {
+                scope = (char*)prte_info_ver_all;
+            } else {
+                if (NULL != tmp[2]) {
+                    pos = tmp[1];
+                    scope = tmp[2];
+                } else {
+                    pos = tmp[1];
+                    scope = (char*)prte_info_ver_all;
+                }
+            }
 
             /* Version of PRTE */
 
@@ -129,13 +138,8 @@ void prte_info_do_version(bool want_all, prte_cmd_line_t *cmd_line)
 
             /* Specific type and component */
 
-            else if (NULL != (pos = strchr(arg1, ':'))) {
-                *pos = '\0';
-                type = arg1;
-                pos++;
-                component = pos;
-
-                prte_info_show_component_version(type, component, scope, prte_info_ver_all);
+            else if (NULL != pos) {
+                prte_info_show_component_version(arg1, pos, scope, prte_info_ver_all);
 
             }
 
@@ -145,6 +149,7 @@ void prte_info_do_version(bool want_all, prte_cmd_line_t *cmd_line)
                 prte_info_show_component_version(arg1, prte_info_component_all, scope,
                                                  prte_info_ver_all);
             }
+            pmix_argv_free(tmp);
         }
     }
 }
@@ -158,10 +163,10 @@ void prte_info_show_component_version(const char *type_name, const char *compone
 {
     bool want_all_components = false;
     bool found;
-    prte_list_item_t *item;
+    pmix_list_item_t *item;
     prte_mca_base_component_list_item_t *cli;
     const prte_mca_base_component_t *component;
-    prte_list_t *components;
+    pmix_list_t *components;
     int j;
     char *pos;
     prte_info_component_map_t *map;
@@ -173,7 +178,7 @@ void prte_info_show_component_version(const char *type_name, const char *compone
 
     /* Check to see if the type is valid */
     for (found = false, j = 0; j < mca_types.size; ++j) {
-        if (NULL == (pos = (char *) prte_pointer_array_get_item(&mca_types, j))) {
+        if (NULL == (pos = (char *) pmix_pointer_array_get_item(&mca_types, j))) {
             continue;
         }
         if (0 == strcmp(pos, type_name)) {
@@ -190,7 +195,7 @@ void prte_info_show_component_version(const char *type_name, const char *compone
     components = NULL;
     for (j = 0; j < prte_component_map.size; j++) {
         if (NULL
-            == (map = (prte_info_component_map_t *) prte_pointer_array_get_item(&prte_component_map,
+            == (map = (prte_info_component_map_t *) pmix_pointer_array_get_item(&prte_component_map,
                                                                                 j))) {
             continue;
         }
@@ -202,9 +207,9 @@ void prte_info_show_component_version(const char *type_name, const char *compone
     }
 
     if (NULL != components) {
-        if (prte_list_get_size(components) > 0) {
-            for (item = prte_list_get_first(components); prte_list_get_end(components) != item;
-                 item = prte_list_get_next(item)) {
+        if (pmix_list_get_size(components) > 0) {
+            for (item = pmix_list_get_first(components); pmix_list_get_end(components) != item;
+                 item = pmix_list_get_next(item)) {
                 cli = (prte_mca_base_component_list_item_t *) item;
                 component = cli->cli_component;
                 if (want_all_components
@@ -256,12 +261,12 @@ static void show_mca_version(const prte_mca_base_component_t *component, const c
                                          component->mca_component_release_version, "", "");
 
     if (prte_info_pretty) {
-        prte_asprintf(&message, "MCA %s", component->mca_type_name);
+        pmix_asprintf(&message, "MCA %s", component->mca_type_name);
         printed = false;
-        prte_asprintf(&content, "%s (", component->mca_component_name);
+        pmix_asprintf(&content, "%s (", component->mca_component_name);
 
         if (want_mca) {
-            prte_asprintf(&tmp, "%sMCA v%s", content, mca_version);
+            pmix_asprintf(&tmp, "%sMCA v%s", content, mca_version);
             free(content);
             content = tmp;
             printed = true;
@@ -269,11 +274,11 @@ static void show_mca_version(const prte_mca_base_component_t *component, const c
 
         if (want_type) {
             if (printed) {
-                prte_asprintf(&tmp, "%s, ", content);
+                pmix_asprintf(&tmp, "%s, ", content);
                 free(content);
                 content = tmp;
             }
-            prte_asprintf(&tmp, "%sAPI v%s", content, api_version);
+            pmix_asprintf(&tmp, "%sAPI v%s", content, api_version);
             free(content);
             content = tmp;
             printed = true;
@@ -281,20 +286,20 @@ static void show_mca_version(const prte_mca_base_component_t *component, const c
 
         if (want_component) {
             if (printed) {
-                prte_asprintf(&tmp, "%s, ", content);
+                pmix_asprintf(&tmp, "%s, ", content);
                 free(content);
                 content = tmp;
             }
-            prte_asprintf(&tmp, "%sComponent v%s", content, component_version);
+            pmix_asprintf(&tmp, "%sComponent v%s", content, component_version);
             free(content);
             content = tmp;
             printed = true;
         }
         if (NULL != content) {
-            prte_asprintf(&tmp, "%s)", content);
+            pmix_asprintf(&tmp, "%s)", content);
             free(content);
         } else {
-            prte_asprintf(&tmp, ")");
+            pmix_asprintf(&tmp, ")");
         }
 
         prte_info_out(message, NULL, tmp);
@@ -302,20 +307,20 @@ static void show_mca_version(const prte_mca_base_component_t *component, const c
         free(tmp);
 
     } else {
-        prte_asprintf(&message, "mca:%s:%s:version", component->mca_type_name,
+        pmix_asprintf(&message, "mca:%s:%s:version", component->mca_type_name,
                       component->mca_component_name);
         if (want_mca) {
-            prte_asprintf(&tmp, "mca:%s", mca_version);
+            pmix_asprintf(&tmp, "mca:%s", mca_version);
             prte_info_out(NULL, message, tmp);
             free(tmp);
         }
         if (want_type) {
-            prte_asprintf(&tmp, "api:%s", api_version);
+            pmix_asprintf(&tmp, "api:%s", api_version);
             prte_info_out(NULL, message, tmp);
             free(tmp);
         }
         if (want_component) {
-            prte_asprintf(&tmp, "component:%s", component_version);
+            pmix_asprintf(&tmp, "component:%s", component_version);
             prte_info_out(NULL, message, tmp);
             free(tmp);
         }
@@ -339,17 +344,17 @@ static char *make_version_str(const char *scope, int major, int minor, int relea
         str = strdup(temp);
         if (release > 0) {
             snprintf(temp, BUFSIZ - 1, ".%d", release);
-            prte_asprintf(&tmp, "%s%s", str, temp);
+            pmix_asprintf(&tmp, "%s%s", str, temp);
             free(str);
             str = tmp;
         }
         if (NULL != greek) {
-            prte_asprintf(&tmp, "%s%s", str, greek);
+            pmix_asprintf(&tmp, "%s%s", str, greek);
             free(str);
             str = tmp;
         }
         if (NULL != repo) {
-            prte_asprintf(&tmp, "%s%s", str, repo);
+            pmix_asprintf(&tmp, "%s%s", str, repo);
             free(str);
             str = tmp;
         }

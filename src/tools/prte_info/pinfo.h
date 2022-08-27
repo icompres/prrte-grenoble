@@ -14,7 +14,7 @@
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2016-2019 Intel, Inc.  All rights reserved.
  * Copyright (c) 2018      Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -26,11 +26,11 @@
 #define PRTE_INFO_TOOL_H
 #include "prte_config.h"
 
-#include "src/class/prte_list.h"
-#include "src/class/prte_pointer_array.h"
+#include "src/class/pmix_list.h"
+#include "src/class/pmix_pointer_array.h"
 #include "src/mca/mca.h"
-#include "src/util/cmd_line.h"
-#include "src/util/printf.h"
+#include "src/util/pmix_cmd_line.h"
+#include "src/util/pmix_printf.h"
 
 BEGIN_C_DECLS
 
@@ -39,13 +39,13 @@ BEGIN_C_DECLS
  */
 
 extern bool prte_info_pretty;
-extern prte_cmd_line_t *prte_info_cmd_line;
+extern pmix_cli_result_t prte_info_cmd_line;
 
 extern const char *prte_info_type_all;
 extern const char *prte_info_type_prte;
 extern const char *prte_info_type_base;
 
-extern prte_pointer_array_t mca_types;
+extern pmix_pointer_array_t mca_types;
 
 /*
  * Version-related strings and functions
@@ -58,7 +58,7 @@ extern const char *prte_info_ver_release;
 extern const char *prte_info_ver_greek;
 extern const char *prte_info_ver_svn;
 
-void prte_info_do_version(bool want_all, prte_cmd_line_t *cmd_line);
+void prte_info_do_version(bool want_all);
 void prte_info_show_prte_version(const char *scope);
 void prte_info_show_component_version(const char *type_name, const char *component_name,
                                       const char *scope, const char *ver_type);
@@ -91,7 +91,7 @@ extern const char *prte_info_path_pkgincludedir;
 void prte_info_do_params(bool want_all, bool want_internal);
 void prte_info_show_mca_params(const char *type, const char *component, bool want_internal);
 
-void prte_info_do_path(bool want_all, prte_cmd_line_t *cmd_line);
+void prte_info_do_path(bool want_all);
 void prte_info_show_path(const char *type, const char *value);
 
 void prte_info_do_arch(void);
@@ -108,14 +108,14 @@ void prte_info_out_int(const char *pretty_message, const char *plain_message, in
  * Component-related functions
  */
 typedef struct {
-    prte_list_item_t super;
+    pmix_list_item_t super;
     char *type;
-    prte_list_t *components;
-    prte_list_t *failed_components;
+    pmix_list_t *components;
+    pmix_list_t *failed_components;
 } prte_info_component_map_t;
-PRTE_EXPORT PRTE_CLASS_DECLARATION(prte_info_component_map_t);
+PRTE_EXPORT PMIX_CLASS_DECLARATION(prte_info_component_map_t);
 
-extern prte_pointer_array_t prte_component_map;
+extern pmix_pointer_array_t prte_component_map;
 
 void prte_info_components_open(void);
 void prte_info_components_close(void);

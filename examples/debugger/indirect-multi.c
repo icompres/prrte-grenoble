@@ -15,7 +15,7 @@
  * Copyright (c) 2011      Oak Ridge National Labs.  All rights reserved.
  * Copyright (c) 2013-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2015      Mellanox Technologies, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * Copyright (c) 2021      IBM Corporation.  All rights reserved.
  * $COPYRIGHT$
  *
@@ -218,12 +218,9 @@ static pmix_status_t spawn_daemons(char **dbgrs)
     /* provide directives so the daemons go where we want, and
      * let the RM know these are debugger daemons */
     PMIX_INFO_LIST_START(dirs);
-    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_DEBUGGER_DAEMONS, NULL,
-                       PMIX_BOOL); // these are debugger daemons
-    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_DEBUG_TARGET, &target_proc,
-                       PMIX_PROC); // the nspace being debugged
-    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_NOTIFY_COMPLETION, NULL,
-                       PMIX_BOOL); // notify us when the debugger job completes
+    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_DEBUGGER_DAEMONS, NULL, PMIX_BOOL); // these are debugger daemons
+    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_DEBUG_TARGET, &target_proc, PMIX_PROC); // the nspace being debugged
+    PMIX_INFO_LIST_ADD(rc, dirs, PMIX_NOTIFY_COMPLETION, NULL, PMIX_BOOL); // notify us when the debugger job completes
     PMIX_INFO_LIST_ADD(rc, dirs, PMIX_FWD_STDOUT, NULL, PMIX_BOOL); // forward stdout to me
     PMIX_INFO_LIST_ADD(rc, dirs, PMIX_FWD_STDERR, NULL, PMIX_BOOL); // forward stderr to me
     if (0 < daemon_colocate_per_proc) {
@@ -233,9 +230,8 @@ static pmix_status_t spawn_daemons(char **dbgrs)
         PMIX_INFO_LIST_ADD(rc, dirs, PMIX_DEBUG_DAEMONS_PER_NODE, &daemon_colocate_per_node, PMIX_UINT16);
     }
     else {
-        PMIX_INFO_LIST_ADD(rc, dirs, PMIX_MAPBY, "ppr:1:node:oversubscribe",
-                           PMIX_STRING); // instruct the RM to launch one copy of the daemon on each
-                                         // node
+        // instruct the RM to launch one copy of the daemon on each node
+        PMIX_INFO_LIST_ADD(rc, dirs, PMIX_MAPBY, "ppr:1:node:oversubscribe", PMIX_STRING);
         if (NULL != hostfile) {
             app.maxprocs = num_nodes;
             PMIX_INFO_LIST_ADD(rc, dirs, PMIX_HOSTFILE, hostfile, PMIX_STRING);
@@ -404,7 +400,11 @@ int main(int argc, char **argv)
            (unsigned long) pid);
 
     /* get server URI as we will need it later */
+#ifdef PMIX_MYSERVER_URI
+    rc = PMIx_Get(&myproc, PMIX_MYSERVER_URI, NULL, 0, &val);
+#else
     rc = PMIx_Get(&myproc, PMIX_SERVER_URI, NULL, 0, &val);
+#endif
     if (PMIX_SUCCESS != rc) {
         fprintf(stderr, "Failed to retrieve server URI: %s\n", PMIx_Error_string(rc));
         PMIx_tool_finalize();
@@ -495,7 +495,7 @@ int main(int argc, char **argv)
     PMIX_INFO_LIST_RELEASE(dirs);
     info = (pmix_info_t*)darray.array;
     ninfo = darray.size;
-    PMIx_Notify_event(PMIX_DEBUGGER_RELEASE, &myproc, PMIX_RANGE_CUSTOM, info, 2, NULL, NULL);
+    PMIx_Notify_event(PMIX_DEBUGGER_RELEASE, &myproc, PMIX_RANGE_CUSTOM, info, ninfo, NULL, NULL);
     PMIX_DATA_ARRAY_DESTRUCT(&darray);
 
     printf("Waiting for application launch\n");

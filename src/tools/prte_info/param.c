@@ -18,7 +18,7 @@
  * Copyright (c) 2018      Los Alamos National Security, LLC. All rights
  *                         reserved.
  * Copyright (c) 2018      Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * Copyright (c) 2021      FUJITSU LIMITED.  All rights reserved.
  * $COPYRIGHT$
  *
@@ -41,14 +41,14 @@
 #    include <netdb.h>
 #endif
 
-#include "src/class/prte_pointer_array.h"
-#include "src/class/prte_value_array.h"
+#include "src/class/pmix_pointer_array.h"
+#include "src/class/pmix_value_array.h"
 #include "src/include/prte_portable_platform.h"
 #include "src/include/version.h"
 #include "src/mca/prteinstalldirs/prteinstalldirs.h"
-#include "src/util/printf.h"
-
-#include "src/util/show_help.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_printf.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/tools/prte_info/pinfo.h"
 
@@ -79,27 +79,27 @@ const char *prte_info_path_pkgincludedir = "pkgincludedir";
 
 void prte_info_do_params(bool want_all_in, bool want_internal)
 {
-    int count;
-    char *type, *component, *str;
+    char *type, *str;
+    char **args = NULL, **tmp;
     bool found;
-    int i;
+    int i, j;
     bool want_all = false;
-    prte_value_t *pval;
+    pmix_cli_item_t *opt;
 
     prte_info_components_open();
+    opt = pmix_cmd_line_get_param(&prte_info_cmd_line, "param");
 
     if (want_all_in) {
         want_all = true;
     } else {
-        /* See if the special param "all" was givin to --param; that
+        /* See if the special param "all" was given to --param; that
          * superceeds any individual type
          */
-        count = prte_cmd_line_get_ninsts(prte_info_cmd_line, "param");
-        for (i = 0; i < count; ++i) {
-            pval = prte_cmd_line_get_param(prte_info_cmd_line, "param", (int) i, 0);
-            if (0 == strcmp(prte_info_type_all, pval->value.data.string)) {
+        if (NULL != opt) {
+            /* split the arguments at the colon */
+            args = pmix_argv_split(opt->values[0], ':');
+            if (0 == strcmp(args[0], "all")) {
                 want_all = true;
-                break;
             }
         }
     }
@@ -107,37 +107,44 @@ void prte_info_do_params(bool want_all_in, bool want_internal)
     /* Show the params */
     if (want_all) {
         for (i = 0; i < mca_types.size; ++i) {
-            if (NULL == (type = (char *) prte_pointer_array_get_item(&mca_types, i))) {
+            if (NULL == (type = (char *) pmix_pointer_array_get_item(&mca_types, i))) {
                 continue;
             }
             prte_info_show_mca_params(type, prte_info_component_all, want_internal);
         }
     } else {
-        for (i = 0; i < count; ++i) {
-            pval = prte_cmd_line_get_param(prte_info_cmd_line, "param", (int) i, 0);
-            type = pval->value.data.string;
-            pval = prte_cmd_line_get_param(prte_info_cmd_line, "param", (int) i, 1);
-            component = pval->value.data.string;
+        if (NULL != opt && NULL != args) {
+            type = args[0];
+            if (NULL != args[1]) {
+                tmp = pmix_argv_split(args[1], ',');
 
-            for (found = false, i = 0; i < mca_types.size; ++i) {
-                if (NULL == (str = (char *) prte_pointer_array_get_item(&mca_types, i))) {
-                    continue;
+                for (j=0; NULL != tmp[j]; j++) {
+                    for (found = false, i = 0; i < mca_types.size; ++i) {
+                        str = (char *) pmix_pointer_array_get_item(&mca_types, i);
+                        if (NULL == str) {
+                            continue;
+                        }
+                        if (0 == strcmp(str, type)) {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        pmix_show_help("help-pinfo.txt", "not-found", true, type);
+                        exit(1);
+                    }
+
+                    prte_info_show_mca_params(type, tmp[j], want_internal);
                 }
-                if (0 == strcmp(str, type)) {
-                    found = true;
-                    break;
-                }
+                pmix_argv_free(tmp);
+            } else {
+                prte_info_show_mca_params(type, "*", want_internal);
             }
-
-            if (!found) {
-                char *usage = prte_cmd_line_get_usage_msg(prte_info_cmd_line, false);
-                prte_show_help("help-pinfo.txt", "not-found", true, type);
-                free(usage);
-                exit(1);
-            }
-
-            prte_info_show_mca_params(type, component, want_internal);
         }
+    }
+    if (NULL != args) {
+        pmix_argv_free(args);
     }
 }
 
@@ -150,8 +157,8 @@ static void prte_info_show_mca_group_params(const prte_mca_base_var_group_t *gro
     const int *groups;
     char **strings;
 
-    variables = PRTE_VALUE_ARRAY_GET_BASE(&group->group_vars, const int);
-    count = prte_value_array_get_size((prte_value_array_t *) &group->group_vars);
+    variables = PMIX_VALUE_ARRAY_GET_BASE(&group->group_vars, const int);
+    count = pmix_value_array_get_size((pmix_value_array_t *) &group->group_vars);
 
     for (i = 0; i < count; ++i) {
         ret = prte_mca_base_var_get(variables[i], &var);
@@ -171,7 +178,7 @@ static void prte_info_show_mca_group_params(const prte_mca_base_var_group_t *gro
             if (0 == j && prte_info_pretty) {
                 char *message;
 
-                prte_asprintf(&message, "MCA %s", group->group_framework);
+                pmix_asprintf(&message, "MCA %s", group->group_framework);
                 prte_info_out(message, message, strings[j]);
                 free(message);
             } else {
@@ -182,8 +189,8 @@ static void prte_info_show_mca_group_params(const prte_mca_base_var_group_t *gro
         free(strings);
     }
 
-    groups = PRTE_VALUE_ARRAY_GET_BASE(&group->group_subgroups, const int);
-    count = prte_value_array_get_size((prte_value_array_t *) &group->group_subgroups);
+    groups = PMIX_VALUE_ARRAY_GET_BASE(&group->group_subgroups, const int);
+    count = pmix_value_array_get_size((pmix_value_array_t *) &group->group_subgroups);
 
     for (i = 0; i < count; ++i) {
         ret = prte_mca_base_var_group_get(groups[i], &group);
@@ -219,20 +226,21 @@ void prte_info_show_mca_params(const char *type, const char *component, bool wan
     }
 }
 
-void prte_info_do_path(bool want_all, prte_cmd_line_t *cmd_line)
+void prte_info_do_path(bool want_all)
 {
     int i, count;
     char *scope;
-    prte_value_t *pval;
+    pmix_cli_item_t *opt;
 
     /* Check bozo case */
-    count = prte_cmd_line_get_ninsts(cmd_line, "path");
-    for (i = 0; i < count; ++i) {
-        pval = prte_cmd_line_get_param(cmd_line, "path", i, 0);
-        scope = pval->value.data.string;
-        if (0 == strcmp("all", scope)) {
-            want_all = true;
-            break;
+    opt = pmix_cmd_line_get_param(&prte_info_cmd_line, "path");
+    if (NULL != opt) {
+        for (i=0; NULL != opt->values[i]; i++) {
+            scope = opt->values[i];
+            if (0 == strcmp("all", scope)) {
+                want_all = true;
+                break;
+            }
         }
     }
 
@@ -256,51 +264,49 @@ void prte_info_do_path(bool want_all, prte_cmd_line_t *cmd_line)
         prte_info_show_path(prte_info_path_pkglibdir, prte_install_dirs.prtelibdir);
         prte_info_show_path(prte_info_path_pkgincludedir, prte_install_dirs.prteincludedir);
     } else {
-        count = prte_cmd_line_get_ninsts(cmd_line, "path");
-        for (i = 0; i < count; ++i) {
-            pval = prte_cmd_line_get_param(cmd_line, "path", i, 0);
-            scope = pval->value.data.string;
+        if (NULL != opt) {
+            for (i=0; NULL != opt->values[i]; i++) {
+                scope = opt->values[i];
 
-            if (0 == strcmp(prte_info_path_prefix, scope)) {
-                prte_info_show_path(prte_info_path_prefix, prte_install_dirs.prefix);
-            } else if (0 == strcmp(prte_info_path_bindir, scope)) {
-                prte_info_show_path(prte_info_path_bindir, prte_install_dirs.bindir);
-            } else if (0 == strcmp(prte_info_path_libdir, scope)) {
-                prte_info_show_path(prte_info_path_libdir, prte_install_dirs.libdir);
-            } else if (0 == strcmp(prte_info_path_incdir, scope)) {
-                prte_info_show_path(prte_info_path_incdir, prte_install_dirs.includedir);
-            } else if (0 == strcmp(prte_info_path_mandir, scope)) {
-                prte_info_show_path(prte_info_path_mandir, prte_install_dirs.mandir);
-            } else if (0 == strcmp(prte_info_path_pkglibdir, scope)) {
-                prte_info_show_path(prte_info_path_pkglibdir, prte_install_dirs.prtelibdir);
-            } else if (0 == strcmp(prte_info_path_sysconfdir, scope)) {
-                prte_info_show_path(prte_info_path_sysconfdir, prte_install_dirs.sysconfdir);
-            } else if (0 == strcmp(prte_info_path_exec_prefix, scope)) {
-                prte_info_show_path(prte_info_path_exec_prefix, prte_install_dirs.exec_prefix);
-            } else if (0 == strcmp(prte_info_path_sbindir, scope)) {
-                prte_info_show_path(prte_info_path_sbindir, prte_install_dirs.sbindir);
-            } else if (0 == strcmp(prte_info_path_libexecdir, scope)) {
-                prte_info_show_path(prte_info_path_libexecdir, prte_install_dirs.libexecdir);
-            } else if (0 == strcmp(prte_info_path_datarootdir, scope)) {
-                prte_info_show_path(prte_info_path_datarootdir, prte_install_dirs.datarootdir);
-            } else if (0 == strcmp(prte_info_path_datadir, scope)) {
-                prte_info_show_path(prte_info_path_datadir, prte_install_dirs.datadir);
-            } else if (0 == strcmp(prte_info_path_sharedstatedir, scope)) {
-                prte_info_show_path(prte_info_path_sharedstatedir,
-                                    prte_install_dirs.sharedstatedir);
-            } else if (0 == strcmp(prte_info_path_localstatedir, scope)) {
-                prte_info_show_path(prte_info_path_localstatedir, prte_install_dirs.localstatedir);
-            } else if (0 == strcmp(prte_info_path_infodir, scope)) {
-                prte_info_show_path(prte_info_path_infodir, prte_install_dirs.infodir);
-            } else if (0 == strcmp(prte_info_path_pkgdatadir, scope)) {
-                prte_info_show_path(prte_info_path_pkgdatadir, prte_install_dirs.prtedatadir);
-            } else if (0 == strcmp(prte_info_path_pkgincludedir, scope)) {
-                prte_info_show_path(prte_info_path_pkgincludedir, prte_install_dirs.prteincludedir);
-            } else {
-                char *usage = prte_cmd_line_get_usage_msg(cmd_line, false);
-                prte_show_help("help-pinfo.txt", "usage", true, usage);
-                free(usage);
-                exit(1);
+                if (0 == strcmp(prte_info_path_prefix, scope)) {
+                    prte_info_show_path(prte_info_path_prefix, prte_install_dirs.prefix);
+                } else if (0 == strcmp(prte_info_path_bindir, scope)) {
+                    prte_info_show_path(prte_info_path_bindir, prte_install_dirs.bindir);
+                } else if (0 == strcmp(prte_info_path_libdir, scope)) {
+                    prte_info_show_path(prte_info_path_libdir, prte_install_dirs.libdir);
+                } else if (0 == strcmp(prte_info_path_incdir, scope)) {
+                    prte_info_show_path(prte_info_path_incdir, prte_install_dirs.includedir);
+                } else if (0 == strcmp(prte_info_path_mandir, scope)) {
+                    prte_info_show_path(prte_info_path_mandir, prte_install_dirs.mandir);
+                } else if (0 == strcmp(prte_info_path_pkglibdir, scope)) {
+                    prte_info_show_path(prte_info_path_pkglibdir, prte_install_dirs.prtelibdir);
+                } else if (0 == strcmp(prte_info_path_sysconfdir, scope)) {
+                    prte_info_show_path(prte_info_path_sysconfdir, prte_install_dirs.sysconfdir);
+                } else if (0 == strcmp(prte_info_path_exec_prefix, scope)) {
+                    prte_info_show_path(prte_info_path_exec_prefix, prte_install_dirs.exec_prefix);
+                } else if (0 == strcmp(prte_info_path_sbindir, scope)) {
+                    prte_info_show_path(prte_info_path_sbindir, prte_install_dirs.sbindir);
+                } else if (0 == strcmp(prte_info_path_libexecdir, scope)) {
+                    prte_info_show_path(prte_info_path_libexecdir, prte_install_dirs.libexecdir);
+                } else if (0 == strcmp(prte_info_path_datarootdir, scope)) {
+                    prte_info_show_path(prte_info_path_datarootdir, prte_install_dirs.datarootdir);
+                } else if (0 == strcmp(prte_info_path_datadir, scope)) {
+                    prte_info_show_path(prte_info_path_datadir, prte_install_dirs.datadir);
+                } else if (0 == strcmp(prte_info_path_sharedstatedir, scope)) {
+                    prte_info_show_path(prte_info_path_sharedstatedir,
+                                        prte_install_dirs.sharedstatedir);
+                } else if (0 == strcmp(prte_info_path_localstatedir, scope)) {
+                    prte_info_show_path(prte_info_path_localstatedir, prte_install_dirs.localstatedir);
+                } else if (0 == strcmp(prte_info_path_infodir, scope)) {
+                    prte_info_show_path(prte_info_path_infodir, prte_install_dirs.infodir);
+                } else if (0 == strcmp(prte_info_path_pkgdatadir, scope)) {
+                    prte_info_show_path(prte_info_path_pkgdatadir, prte_install_dirs.prtedatadir);
+                } else if (0 == strcmp(prte_info_path_pkgincludedir, scope)) {
+                    prte_info_show_path(prte_info_path_pkgincludedir, prte_install_dirs.prteincludedir);
+                } else {
+                    pmix_show_help("help-pinfo.txt", "usage", true, "USAGE");
+                    exit(1);
+                }
             }
         }
     }
@@ -313,7 +319,7 @@ void prte_info_show_path(const char *type, const char *value)
     pretty = strdup(type);
     pretty[0] = toupper(pretty[0]);
 
-    prte_asprintf(&path, "path:%s", type);
+    pmix_asprintf(&path, "path:%s", type);
     prte_info_out(pretty, path, value);
     free(pretty);
     free(path);
@@ -355,7 +361,7 @@ void prte_info_do_config(bool want_all)
     have_dl = PRTE_HAVE_DL_SUPPORT ? "yes" : "no";
     prun_prefix_by_default = PRTE_WANT_PRTE_PREFIX_BY_DEFAULT ? "yes" : "no";
     symbol_visibility = PRTE_C_HAVE_VISIBILITY ? "yes" : "no";
-    manpages = PRTE_ENABLE_MAN_PAGES ? "yes" : "no";
+    manpages = "yes";
     resilience = PRTE_ENABLE_FT ? "yes" : "no";
 
     /* output values */
@@ -371,9 +377,9 @@ void prte_info_do_config(bool want_all)
     prte_info_out("C compiler", "compiler:c:command", PRTE_CC);
     prte_info_out("C compiler absolute", "compiler:c:absolute", PRTE_CC_ABSOLUTE);
     prte_info_out("C compiler family name", "compiler:c:familyname",
-                  _STRINGIFY(PLATFORM_COMPILER_FAMILYNAME));
+                  PLATFORM_STRINGIFY(PLATFORM_COMPILER_FAMILYNAME));
     prte_info_out("C compiler version", "compiler:c:version",
-                  _STRINGIFY(PLATFORM_COMPILER_VERSION_STR));
+                  PLATFORM_STRINGIFY(PLATFORM_COMPILER_VERSION_STR));
 
     if (want_all) {
         prte_info_out_int("C char size", "compiler:c:sizeof:char", sizeof(char));
@@ -384,10 +390,8 @@ void prte_info_do_config(bool want_all)
         prte_info_out_int("C float size", "compiler:c:sizeof:float", sizeof(float));
         prte_info_out_int("C double size", "compiler:c:sizeof:double", sizeof(double));
         prte_info_out_int("C pointer size", "compiler:c:sizeof:pointer", sizeof(void *));
-        prte_info_out_int("C char align", "compiler:c:align:char", ALIGNOF_CHAR);
         prte_info_out("C bool align", "compiler:c:align:bool", "skipped");
         prte_info_out_int("C int align", "compiler:c:align:int", ALIGNOF_INT);
-        prte_info_out_int("C float align", "compiler:c:align:float", ALIGNOF_FLOAT);
         prte_info_out_int("C double align", "compiler:c:align:double", ALIGNOF_DOUBLE);
     }
 

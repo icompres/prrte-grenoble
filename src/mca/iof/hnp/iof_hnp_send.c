@@ -13,7 +13,7 @@
  * Copyright (c) 2012      Los Alamos National Security, LLC
  *                         All rights reserved
  * Copyright (c) 2014-2019 Intel, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -32,8 +32,7 @@
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/grpcomm/grpcomm.h"
-#include "src/mca/rml/rml.h"
-#include "src/mca/rml/rml_types.h"
+#include "src/rml/rml.h"
 #include "src/pmix/pmix-internal.h"
 #include "src/runtime/prte_globals.h"
 #include "src/util/name_fns.h"
@@ -43,7 +42,9 @@
 
 #include "iof_hnp.h"
 
-int prte_iof_hnp_send_data_to_endpoint(pmix_proc_t *host, pmix_proc_t *target, prte_iof_tag_t tag,
+int prte_iof_hnp_send_data_to_endpoint(const pmix_proc_t *host,
+                                       const pmix_proc_t *target,
+                                       prte_iof_tag_t tag,
                                        unsigned char *data, int numbytes)
 {
     pmix_data_buffer_t *buf;
@@ -76,22 +77,19 @@ int prte_iof_hnp_send_data_to_endpoint(pmix_proc_t *host, pmix_proc_t *target, p
      * recipient (if the tag is stdin and we are sending to a daemon),
      * or the source (if we are sending to anyone else)
      */
-    rc = PMIx_Data_pack(NULL, buf, target, 1, PMIX_PROC);
+    rc = PMIx_Data_pack(NULL, buf, (void*)target, 1, PMIX_PROC);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
         PMIX_DATA_BUFFER_RELEASE(buf);
         return rc;
     }
 
-    /* if data is NULL, then we are done */
-    if (NULL != data) {
-        /* pack the data - if numbytes is zero, we will pack zero bytes */
-        rc = PMIx_Data_pack(NULL, buf, data, numbytes, PMIX_BYTE);
-        if (PMIX_SUCCESS != rc) {
-            PMIX_ERROR_LOG(rc);
-            PMIX_DATA_BUFFER_RELEASE(buf);
-            return rc;
-        }
+    /* pack the data - if numbytes is zero, we will pack zero bytes */
+    rc = PMIx_Data_pack(NULL, buf, data, numbytes, PMIX_BYTE);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        PMIX_DATA_BUFFER_RELEASE(buf);
+        return rc;
     }
 
     /* if the target is wildcard, then this needs to go to everyone - xcast it */
@@ -110,9 +108,10 @@ int prte_iof_hnp_send_data_to_endpoint(pmix_proc_t *host, pmix_proc_t *target, p
     /* send the buffer to the host - this is either a daemon or
      * a tool that requested IOF
      */
-    if (0 > (rc = prte_rml.send_buffer_nb(host, buf, PRTE_RML_TAG_IOF_PROXY, prte_rml_send_callback,
-                                          NULL))) {
+    PRTE_RML_SEND(rc, host->rank, buf, PRTE_RML_TAG_IOF_PROXY);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
+        PMIX_DATA_BUFFER_RELEASE(buf);
         return rc;
     }
 

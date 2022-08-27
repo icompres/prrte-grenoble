@@ -6,6 +6,7 @@
 .cdt*
 .project
 .gdb*
+cov-int
 
 .hgrc
 .hgignore
@@ -40,9 +41,6 @@
 *.sapp
 *~
 *\\#
-
-*.1
-*.7
 
 Makefile
 Makefile.in
@@ -131,6 +129,9 @@ examples/debugger/daemon
 examples/debugger/hello
 examples/debugger/direct-multi
 examples/debugger/indirect-multi
+examples/debugger/stdincheck
+examples/legacy
+examples/colocate
 
 src/sys/powerpc/atomic-32.s
 src/sys/powerpc/atomic-64.s

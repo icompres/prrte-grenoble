@@ -16,7 +16,7 @@
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2017-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -45,10 +45,10 @@
 #include "constants.h"
 #include "types.h"
 
-#include "src/class/prte_bitmap.h"
-#include "src/class/prte_list.h"
+#include "src/class/pmix_bitmap.h"
+#include "src/class/pmix_list.h"
 #include "src/mca/mca.h"
-#include "src/mca/rml/rml_types.h"
+#include "src/rml/rml_types.h"
 #include "src/pmix/pmix-internal.h"
 
 BEGIN_C_DECLS
@@ -62,18 +62,19 @@ typedef int (*prte_grpcomm_rbcast_cb_t)(pmix_data_buffer_t *buffer);
 /* Define a collective signature so we don't need to
  * track global collective id's */
 typedef struct {
-    prte_object_t super;
+    pmix_object_t super;
     pmix_proc_t *signature;
     size_t sz;
 } prte_grpcomm_signature_t;
-PRTE_EXPORT PRTE_CLASS_DECLARATION(prte_grpcomm_signature_t);
+PRTE_EXPORT PMIX_CLASS_DECLARATION(prte_grpcomm_signature_t);
 
 /* Internal component object for tracking ongoing
  * allgather operations */
 typedef struct {
-    prte_list_item_t super;
+    pmix_list_item_t super;
     /* collective's signature */
     prte_grpcomm_signature_t *sig;
+    pmix_status_t status;
     /* collection bucket */
     pmix_data_buffer_t bucket;
     /* participating daemons */
@@ -87,7 +88,7 @@ typedef struct {
     /* number reported in */
     size_t nreported;
     /* distance masks for receive */
-    prte_bitmap_t distance_mask_recv;
+    pmix_bitmap_t distance_mask_recv;
     /* received buckets */
     pmix_data_buffer_t **buffers;
     /* callback function */
@@ -95,7 +96,7 @@ typedef struct {
     /* user-provided callback data */
     void *cbdata;
 } prte_grpcomm_coll_t;
-PRTE_CLASS_DECLARATION(prte_grpcomm_coll_t);
+PMIX_CLASS_DECLARATION(prte_grpcomm_coll_t);
 
 /*
  * Component functions - all MUST be provided!
@@ -122,7 +123,8 @@ typedef int (*prte_grpcomm_base_module_xcast_fn_t)(pmix_rank_t *vpids, size_t np
  * NOTE: this is a non-blocking call. The callback function cached in
  * the prte_grpcomm_coll_t will be invoked upon completion. */
 typedef int (*prte_grpcomm_base_module_allgather_fn_t)(prte_grpcomm_coll_t *coll,
-                                                       pmix_data_buffer_t *buf, int mode);
+                                                       pmix_data_buffer_t *buf, int mode,
+                                                       pmix_status_t local_status);
 
 /* Reliable broadcast a message thru BMG.
  * only need to provide a message buffer, dont need create dmns
@@ -169,7 +171,9 @@ typedef int (*prte_grpcomm_base_API_xcast_fn_t)(prte_grpcomm_signature_t *sig, p
  * will be invoked upon completion. */
 typedef int (*prte_grpcomm_base_API_allgather_fn_t)(prte_grpcomm_signature_t *sig,
                                                     pmix_data_buffer_t *buf, int mode,
+                                                    pmix_status_t local_status,
                                                     prte_grpcomm_cbfunc_t cbfunc, void *cbdata);
+
 /* Reliable broadcast a message. Caller will provide an array
  * of daemon. A NULL pointer indicates that all known daemons are in the BMG.
  * A pointer to a name that includes ORTE_VPID_WILDCARD

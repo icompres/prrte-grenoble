@@ -3,7 +3,7 @@
  * Copyright (c) 2015-2019 Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -18,12 +18,16 @@
 
 #include "src/mca/base/base.h"
 #include "src/mca/mca.h"
-#include "src/util/argv.h"
 #include "src/util/output.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_os_dirpath.h"
+#include "src/util/pmix_os_path.h"
+#include "src/util/pmix_path.h"
+#include "src/util/prte_cmd_line.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/runtime/prte_globals.h"
-#include "src/util/show_help.h"
 
 #include "src/mca/schizo/base/base.h"
 /*
@@ -37,18 +41,15 @@
 /*
  * Global variables
  */
-prte_schizo_base_t prte_schizo_base = {{{0}}};
-prte_schizo_API_module_t prte_schizo = {.parse_env = prte_schizo_base_parse_env,
-                                        .detect_proxy = prte_schizo_base_detect_proxy,
-                                        .setup_app = prte_schizo_base_setup_app,
-                                        .setup_fork = prte_schizo_base_setup_fork,
-                                        .setup_child = prte_schizo_base_setup_child,
-                                        .job_info = prte_schizo_base_job_info,
-                                        .check_sanity = prte_schizo_base_check_sanity,
-                                        .finalize = prte_schizo_base_finalize};
+prte_schizo_base_t prte_schizo_base = {
+    .active_modules = PMIX_LIST_STATIC_INIT,
+    .test_proxy_launch = false
+};
 
 static int prte_schizo_base_register(prte_mca_base_register_flag_t flags)
 {
+    PRTE_HIDE_UNUSED_PARAMS(flags);
+
     /* test proxy launch */
     prte_schizo_base.test_proxy_launch = false;
     prte_mca_base_var_register("prte", "schizo", "base", "test_proxy_launch", "Test proxy launches",
@@ -61,7 +62,7 @@ static int prte_schizo_base_register(prte_mca_base_register_flag_t flags)
 static int prte_schizo_base_close(void)
 {
     /* cleanup globals */
-    PRTE_LIST_DESTRUCT(&prte_schizo_base.active_modules);
+    PMIX_LIST_DESTRUCT(&prte_schizo_base.active_modules);
 
     return prte_mca_base_framework_components_close(&prte_schizo_base_framework, NULL);
 }
@@ -75,7 +76,7 @@ static int prte_schizo_base_open(prte_mca_base_open_flag_t flags)
     int rc;
 
     /* init the globals */
-    PRTE_CONSTRUCT(&prte_schizo_base.active_modules, prte_list_t);
+    PMIX_CONSTRUCT(&prte_schizo_base.active_modules, pmix_list_t);
 
     /* Open up all available components */
     rc = prte_mca_base_framework_components_open(&prte_schizo_base_framework, flags);
@@ -89,277 +90,18 @@ PRTE_MCA_BASE_FRAMEWORK_DECLARE(prte, schizo, "PRTE Schizo Subsystem", prte_schi
                                 prte_schizo_base_static_components,
                                 PRTE_MCA_BASE_FRAMEWORK_FLAG_DEFAULT);
 
-typedef struct {
-    char *name;
-    char **conflicts;
-} prte_schizo_conflicts_t;
-
-static prte_schizo_conflicts_t mapby_modifiers[] = {{.name = "oversubscribe",
-                                                     .conflicts = (char *[]){"nooversubscribe",
-                                                                             NULL}},
-                                                    {.name = ""}};
-
-static prte_schizo_conflicts_t rankby_modifiers[] = {{.name = ""}};
-
-static prte_schizo_conflicts_t bindto_modifiers[] = {{.name = ""}};
-
-static prte_schizo_conflicts_t output_modifiers[] = {{.name = ""}};
-
-static prte_schizo_conflicts_t display_modifiers[] = {{.name = ""}};
-
-static int check_modifiers(char *modifier, char **checks, prte_schizo_conflicts_t *conflicts)
+void prte_schizo_base_expose(char *param, char *prefix)
 {
-    int n, m, k;
+    char *value, *pm;
 
-    if (NULL == conflicts) {
-        return PRTE_SUCCESS;
-    }
-    for (n = 0; 0 != strlen(conflicts[n].name); n++) {
-        if (0 == strcasecmp(conflicts[n].name, modifier)) {
-            for (m = 0; NULL != checks[m]; m++) {
-                for (k = 0; NULL != conflicts[n].conflicts[k]; k++) {
-                    if (0 == strcasecmp(checks[m], conflicts[n].conflicts[k])) {
-                        return PRTE_ERR_BAD_PARAM;
-                    }
-                }
-            }
-            break;
-        }
-    }
-    return PRTE_SUCCESS;
-}
-
-int prte_schizo_base_convert(char ***argv, int idx, int ntodelete, char *option, char *directive,
-                             char *modifier, bool report)
-{
-    bool found;
-    char *p2, *help_str, *old_arg;
-    int j, k, cnt, rc;
-    char **pargs = *argv;
-    char **tmp, **tmp2, *output;
-    prte_schizo_conflicts_t *modifiers = NULL;
-
-    /* pick the modifiers to be checked */
-    if (NULL != modifier) {
-        if (0 == strcmp(option, "--map-by")) {
-            modifiers = mapby_modifiers;
-        } else if (0 == strcmp(option, "--rank-by")) {
-            modifiers = rankby_modifiers;
-        } else if (0 == strcmp(option, "--bind-to")) {
-            modifiers = bindto_modifiers;
-        } else if (0 == strcmp(option, "--output")) {
-            modifiers = output_modifiers;
-        } else if (0 == strcmp(option, "--display")) {
-            modifiers = display_modifiers;
-        } else {
-            prte_output(0, "UNRECOGNIZED OPTION: %s", option);
-            return PRTE_ERR_BAD_PARAM;
-        }
-    }
-
-    /* does the matching option already exist? */
-    found = false;
-    for (j = 0; NULL != pargs[j]; j++) {
-        if (0 == strcmp(pargs[j], option)) {
-            found = true;
-            /* if it is a --tune, --output, or --display option, then we need to simply
-             * append the comma-delimited list of files they gave to the existing one */
-            if (0 == strcasecmp(option, "--tune") || 0 == strcasecmp(option, "--output")
-                || 0 == strcasecmp(option, "--display")) {
-                /* it is possible someone gave this option more than once - avoid that here
-                 * while preserving ordering of files */
-                if (j < idx) {
-                    tmp = prte_argv_split(pargs[j + 1], ',');
-                    tmp2 = prte_argv_split(pargs[idx + 1], ',');
-                } else {
-                    tmp2 = prte_argv_split(pargs[j + 1], ',');
-                    tmp = prte_argv_split(pargs[idx + 1], ',');
-                }
-                for (k = 0; NULL != tmp2[k]; k++) {
-                    prte_argv_append_unique_nosize(&tmp, tmp2[k]);
-                }
-                prte_argv_free(tmp2);
-                p2 = prte_argv_join(tmp, ',');
-                prte_argv_free(tmp);
-                free(pargs[j + 1]);
-                pargs[j + 1] = p2;
-                if (0 != strcmp(pargs[j], "--tune") || 0 != strcmp(pargs[j], "--output")
-                    || 0 != strcmp(pargs[j], "--display")) {
-                    prte_asprintf(&help_str, "%s %s", option, p2);
-                    /* can't just call show_help as we want every instance to be reported */
-                    output = prte_show_help_string("help-schizo-base.txt", "deprecated-converted",
-                                                   true, pargs[idx], help_str);
-                    fprintf(stderr, "%s\n", output);
-                    free(output);
-                    free(help_str);
-                }
-                break;
-            }
-            /* were we given a directive? */
-            if (NULL != directive) {
-                /* does it conflict? */
-                if (':' != pargs[j + 1][0]
-                    && 0 != strncasecmp(pargs[j + 1], directive, strlen(directive))) {
-                    prte_asprintf(&help_str, "Conflicting directives \"%s %s\"", pargs[j + 1],
-                                  directive);
-                    /* can't just call show_help as we want every instance to be reported */
-                    output = prte_show_help_string("help-schizo-base.txt", "deprecated-fail", true,
-                                                   pargs[j], help_str);
-                    fprintf(stderr, "%s\n", output);
-                    free(output);
-                    free(help_str);
-                    return PRTE_ERR_BAD_PARAM;
-                }
-                /* no conflict on directive - see if we need to add it */
-                if (':' == pargs[j + 1][0]) {
-                    prte_asprintf(&p2, "%s%s", directive, pargs[j + 1]);
-                    free(pargs[j + 1]);
-                    pargs[j + 1] = p2;
-                    break;
-                }
-            }
-            /* were we given a modifier? */
-            if (NULL != modifier) {
-                /* add the modifier to this value */
-                if (0 == strncmp(pargs[j + 1], "ppr", 3)) {
-                    /* count the number of characters in the directive */
-                    cnt = 0;
-                    for (k = 0; '\0' != pargs[j + 1][k]; k++) {
-                        if (':' == pargs[j + 1][k]) {
-                            ++cnt;
-                        }
-                    }
-                    /* there are two colons in the map-by directive */
-                    if (2 == cnt) {
-                        /* no modifier */
-                        prte_asprintf(&p2, "%s:%s", pargs[j + 1], modifier);
-                    } else {
-                        /* there already is a modifier in the directive */
-                        p2 = strrchr(pargs[j + 1], ':');
-                        goto modify;
-                    }
-                } else if (NULL == (p2 = strchr(pargs[j + 1], ':'))) {
-                    prte_asprintf(&p2, "%s:%s", pargs[j + 1], modifier);
-                } else {
-                modify:
-                    /* we already have modifiers - need to check for conflict with
-                     * the one we were told to add */
-                    ++p2; // step over the colon
-                    tmp = prte_argv_split(p2, ',');
-                    rc = check_modifiers(modifier, tmp, modifiers);
-                    prte_argv_free(tmp);
-                    if (PRTE_SUCCESS != rc) {
-                        /* we have a conflict */
-                        prte_asprintf(&help_str, "  Option %s\n  Conflicting modifiers \"%s %s\"",
-                                      option, pargs[j + 1], modifier);
-                        /* can't just call show_help as we want every instance to be reported */
-                        output = prte_show_help_string("help-schizo-base.txt", "deprecated-fail",
-                                                       true, pargs[j], help_str);
-                        fprintf(stderr, "%s\n", output);
-                        free(output);
-                        free(help_str);
-                        return PRTE_ERR_BAD_PARAM;
-                    }
-                    /* if the directive is ppr, then the new modifier must be prepended */
-                    if (NULL != directive && 0 == strcasecmp(directive, "ppr")) {
-                        /* if we don't already have ppr in the modifier, be sure to add it */
-                        if (NULL == strstr(modifier, "ppr")) {
-                            prte_asprintf(&p2, "ppr:%s:%s", modifier, pargs[j + 1]);
-                        } else {
-                            prte_asprintf(&p2, "%s:%s", modifier, pargs[j + 1]);
-                        }
-                    } else {
-                        prte_asprintf(&p2, "%s:%s", pargs[j + 1], modifier);
-                    }
-                }
-                free(pargs[j + 1]);
-                pargs[j + 1] = p2;
-                if (report) {
-                    prte_asprintf(&help_str, "%s %s", option, p2);
-                    /* can't just call show_help as we want every instance to be reported */
-                    output = prte_show_help_string("help-schizo-base.txt", "deprecated-converted",
-                                                   true, pargs[idx], help_str);
-                    fprintf(stderr, "%s\n", output);
-                    free(output);
-                    free(help_str);
-                }
-            }
-        }
-    }
-    if (found) {
-        if (0 < ntodelete) {
-            /* we need to remove the indicated number of positions */
-            prte_argv_delete(NULL, argv, idx, ntodelete);
-        }
-        return PRTE_SUCCESS;
-    }
-
-    /**** Get here if the specified option is not found in the
-     **** current argv list
-     ****/
-
-    /* if this is the special "-N" option, we silently change it */
-    if (0 == strcmp(pargs[idx], "-N")) {
-        /* free the location of "-N" */
-        free(pargs[idx]);
-        /* replace it with the option */
-        pargs[idx] = strdup(option);
-        /* free the next position as it holds the ppn */
-        free(pargs[idx + 1]);
-        /* replace it with the directive */
-        pargs[idx + 1] = strdup(directive);
-        *argv = pargs;
-        return PRTE_ERR_SILENT;
-    } else {
-        /* add the option */
-        old_arg = strdup(pargs[idx]);
-        free(pargs[idx]);
-        pargs[idx] = strdup(option);
-        /* if the argument is --am or --amca, then we got
-         * here because there wasn't already a --tune argument.
-         * In this case, we don't want to delete anything as
-         * we are just substituting --tune for the original arg */
-        if (0 != strcmp(old_arg, "--am") && 0 != strcasecmp(old_arg, "--amca") && 1 < ntodelete) {
-            prte_argv_delete(NULL, argv, idx + 1, ntodelete - 1);
-        }
-        if (0 == strcasecmp(option, "--tune")) {
-            p2 = NULL;
-            prte_asprintf(&help_str, "%s %s", pargs[idx], pargs[idx + 1]);
-        } else if (0 == strcasecmp(option, "--output") || 0 == strcasecmp(option, "--display")) {
-            if (NULL != directive) {
-                prte_asprintf(&p2, "%s:%s", directive, modifier);
-            } else {
-                p2 = strdup(modifier);
-            }
-        } else if (NULL == directive) {
-            prte_asprintf(&p2, ":%s", modifier);
-        } else if (NULL == modifier) {
-            p2 = strdup(directive);
-        } else {
-            prte_asprintf(&p2, "%s:%s", directive, modifier);
-        }
-        if (NULL != p2) {
-            prte_argv_insert_element(&pargs, idx + 1, p2);
-            prte_asprintf(&help_str, "%s %s", pargs[idx], p2);
-        } else {
-            help_str = strdup(pargs[idx]);
-        }
-        if (report) {
-            /* can't just call show_help as we want every instance to be reported */
-            output = prte_show_help_string("help-schizo-base.txt", "deprecated-converted", true,
-                                           old_arg, help_str);
-            fprintf(stderr, "%s\n", output);
-            free(output);
-        }
-        if (NULL != p2) {
-            free(p2);
-        }
-        free(help_str);
-        free(old_arg);
-    }
-    *argv = pargs; // will have been reallocated
-
-    return PRTE_SUCCESS;
+    value = strchr(param, '=');
+    *value = '\0';
+    ++value;
+    pmix_asprintf(&pm, "%s%s", prefix, param);
+    setenv(pm, value, true);
+    free(pm);
+    --value;
+    *value = '=';
 }
 
 bool prte_schizo_base_check_qualifiers(char *directive,
@@ -377,8 +119,8 @@ bool prte_schizo_base_check_qualifiers(char *directive,
             return true;
         }
     }
-    v = prte_argv_join(valid, ',');
-    prte_show_help("help-prte-rmaps-base.txt",
+    v = pmix_argv_join(valid, ',');
+    pmix_show_help("help-prte-rmaps-base.txt",
                    "unrecognized-qualifier", true,
                    directive, qual, v);
     free(v);
@@ -392,15 +134,34 @@ bool prte_schizo_base_check_directives(char *directive,
 {
     size_t n, m, len, l1, l2;
     char **args, **qls, *v, *q;
-    char *pproptions[] = {"slot", "hwthread", "core", "l1cache",
-                          "l2cache",  "l3cache", "package", "node",
-                          NULL};
+    char *pproptions[] = {
+        PRTE_CLI_SLOT,
+        PRTE_CLI_HWT,
+        PRTE_CLI_CORE,
+        PRTE_CLI_L1CACHE,
+        PRTE_CLI_L2CACHE,
+        PRTE_CLI_L3CACHE,
+        PRTE_CLI_NUMA,
+        PRTE_CLI_PACKAGE,
+        PRTE_CLI_NODE,
+        NULL
+    };
     bool found;
+    char *str;
 
-    /* if it starts with a ':', then these are just modifiers */
+    /* if it starts with a ':', then these are just qualifiers */
     if (':' == dir[0]) {
-        return prte_schizo_base_check_qualifiers(directive, quals, &dir[1]);
+        qls = pmix_argv_split(&dir[1], ':');
+        for (m=0; NULL != qls[m]; m++) {
+            if (!prte_schizo_base_check_qualifiers(directive, quals, qls[m])) {
+                pmix_argv_free(qls);
+                return false;
+            }
+        }
+        pmix_argv_free(qls);
+        return true;
     }
+
     /* always accept the "help" directive */
     if (0 == strcasecmp(dir, "help") ||
         0 == strcasecmp(dir, "-help") ||
@@ -408,7 +169,7 @@ bool prte_schizo_base_check_directives(char *directive,
         return true;
     }
 
-    args = prte_argv_split(dir, ':');
+    args = pmix_argv_split(dir, ':');
     /* remove any '=' in the directive */
     if (NULL != (v = strchr(args[0], '='))) {
         *v = '\0';
@@ -420,8 +181,8 @@ bool prte_schizo_base_check_directives(char *directive,
         if (0 == strncasecmp(args[0], valid[n], len)) {
             /* valid directive - check any qualifiers */
             if (NULL != args[1] && NULL != quals) {
-                if (0 == strcmp(directive, "map-by") &&
-                    0 == strcmp(args[0], "ppr")) {
+                if (0 == strcmp(directive, PRTE_CLI_MAPBY) &&
+                    0 == strcmp(args[0], PRTE_CLI_PPR)) {
                     /* unfortunately, this is a special case that
                      * must be checked separately due to the format
                      * of the qualifier */
@@ -429,150 +190,501 @@ bool prte_schizo_base_check_directives(char *directive,
                     m = strtoul(args[1], &v, 10);
                     if (NULL != v && 0 < strlen(v)) {
                         /* the first entry had to be a pure number */
-                        prte_asprintf(&v, "ppr:[Number of procs/object]:%s", args[2]);
-                        prte_show_help("help-prte-rmaps-base.txt",
+                        pmix_asprintf(&v, "ppr:[Number of procs/object]:%s", args[2]);
+                        pmix_show_help("help-prte-rmaps-base.txt",
                                        "unrecognized-qualifier", true,
                                        directive, dir, v);
                         free(v);
-                        prte_argv_free(args);
+                        pmix_argv_free(args);
                         return false;
                     }
                     found = false;
                     for (m=0; NULL != pproptions[m]; m++) {
-                        if (0 == strcasecmp(args[2], pproptions[m])) {
+                        if (0 == strncasecmp(args[2], pproptions[m], strlen(args[2]))) {
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
-                        v = prte_argv_join(pproptions, ',');
-                        prte_asprintf(&q, "ppr:%s:[%s]", args[1], v);
+                        v = pmix_argv_join(pproptions, ':');
+                        pmix_asprintf(&q, "ppr:%s:[%s]", args[1], v);
                         free(v);
-                        prte_show_help("help-prte-rmaps-base.txt",
+                        pmix_show_help("help-prte-rmaps-base.txt",
                                        "unrecognized-qualifier", true,
                                        directive, dir, q);
                         free(q);
-                        prte_argv_free(args);
+                        pmix_argv_free(args);
                         return false;
                     }
                     if (NULL != args[3]) {
-                        qls = prte_argv_split(args[3], ',');
+                        qls = pmix_argv_split(args[3], ':');
                     } else {
-                        prte_argv_free(args);
+                        pmix_argv_free(args);
                         return true;
                     }
                 } else {
-                    qls = prte_argv_split(args[1], ',');
+                    qls = pmix_argv_split(args[1], ':');
                 }
                for (m=0; NULL != qls[m]; m++) {
                     if (!prte_schizo_base_check_qualifiers(directive, quals, qls[m])) {
-                        prte_argv_free(qls);
-                        prte_argv_free(args);
+                        pmix_argv_free(qls);
+                        pmix_argv_free(args);
                         return false;
                     }
                 }
-                prte_argv_free(qls);
-                prte_argv_free(args);
+                pmix_argv_free(qls);
+                pmix_argv_free(args);
                 return true;
             }
-            prte_argv_free(args);
+            pmix_argv_free(args);
             return true;
         }
     }
-    v = prte_argv_join(valid, ',');
-    prte_show_help("help-prte-rmaps-base.txt",
+    v = pmix_argv_join(valid, ':');
+    pmix_show_help("help-prte-rmaps-base.txt",
                    "unrecognized-directive", true,
                    directive, dir, v);
-    prte_argv_free(args);
+    pmix_argv_free(args);
     return false;
 }
 
-int prte_schizo_base_sanity(prte_cmd_line_t *cmd_line)
+typedef struct {
+    const char *alias;
+    const char *name;
+} prte_synonym_t;
+
+static prte_synonym_t synonyms[] = {
+    {.alias = PRTE_CLI_MACHINEFILE, .name = PRTE_CLI_HOSTFILE},
+    {.alias = PRTE_CLI_WD, .name = PRTE_CLI_WDIR},
+    {.alias = NULL, .name = NULL}
+};
+
+static const char* check_synonym(const char *alias)
 {
-    prte_value_t *pval;
-    char *mappers[] = {"slot", "hwthread", "core", "l1cache", "l2cache",  "l3cache", "package",
-                       "node", "seq",      "dist", "ppr",     "rankfile", NULL};
-    char *mapquals[] = {"pe=", "span", "oversubscribe", "nooversubscribe", "nolocal",
-                        "hwtcpus", "corecpus", "device=", "inherit", "noinherit", "pe-list=",
-                        "file=", "donotlaunch", NULL};
+    int n;
 
-    char *rankers[] = {"slot",    "hwthread", "core", "l1cache", "l2cache",
-                       "l3cache", "package",  "node", NULL};
-    char *rkquals[] = {"span", "fill", NULL};
+    for (n=0; NULL != synonyms[n].alias; n++) {
+        if (0 == strcmp(alias, synonyms[n].alias)) {
+            return synonyms[n].name;
+        }
+    }
+    return NULL;
+}
 
-    char *binders[] = {"none",    "hwthread", "core",    "l1cache",
-                       "l2cache", "l3cache",  "package", NULL};
-    char *bndquals[] = {"overload-allowed", "if-supported", "ordered", "report", NULL};
+static char *limits[] = {
+    PRTE_CLI_PATH,
+    PRTE_CLI_WDIR,
+    PRTE_CLI_PSET,
+    PRTE_CLI_NP,
+    PRTE_CLI_KEEPALIVE,
+    NULL
+};
 
-    char *outputs[] = {"tag", "timestamp", "xml", "merge-stderr-to-stdout", "directory", "filename", NULL};
-    char *outquals[] = {"nocopy", NULL};
+static int check_ndirs(pmix_cli_item_t *opt)
+{
+    int n, count;
+    char *param;
 
-    char *displays[] = {"allocation", "map", "bind", "map-devel", "topo", NULL};
+    for (n=0; NULL != limits[n]; n++) {
+        if (0 == strcmp(opt->key, limits[n])) {
+            count = pmix_argv_count(opt->values);
+            if (1 > count) {
+                param = pmix_argv_join(opt->values, ' ');
+                pmix_show_help("help-schizo-base.txt", "too-many-instances", true,
+                               param, opt->key, count, 1);
+                return PRTE_ERR_SILENT;
+            }
+        }
+    }
+    return PRTE_SUCCESS;
+}
 
-    bool hwtcpus = false;
+/* the sanity checker is provided for DEVELOPERS as it checks that
+ * the options contained in the cmd line being passed to PRRTE for
+ * execution meet PRRTE requirements. Although it does emit
+ * show_help messages, it really isn't intended for USERS - any
+ * problems in translating user cmd lines to PRRTE internal
+ * structs should be worked out by the developers */
+int prte_schizo_base_sanity(pmix_cli_result_t *cmd_line)
+{
+    pmix_cli_item_t *opt, *newopt;
+    int n, rc, count;
+    const char *tgt, *param;
 
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "map-by")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "map-by");
+    char *mappers[] = {
+        PRTE_CLI_SLOT,
+        PRTE_CLI_HWT,
+        PRTE_CLI_CORE,
+        PRTE_CLI_L1CACHE,
+        PRTE_CLI_L2CACHE,
+        PRTE_CLI_L3CACHE,
+        PRTE_CLI_NUMA,
+        PRTE_CLI_PACKAGE,
+        PRTE_CLI_NODE,
+        PRTE_CLI_SEQ,
+        PRTE_CLI_PPR,
+        PRTE_CLI_RANKFILE,
+        PRTE_CLI_PELIST,
+        NULL
+    };
+    char *mapquals[] = {
+        PRTE_CLI_PE,
+        PRTE_CLI_SPAN,
+        PRTE_CLI_OVERSUB,
+        PRTE_CLI_NOOVER,
+        PRTE_CLI_NOLOCAL,
+        PRTE_CLI_HWTCPUS,
+        PRTE_CLI_CORECPUS,
+        PRTE_CLI_INHERIT,
+        PRTE_CLI_NOINHERIT,
+        PRTE_CLI_QFILE,
+        PRTE_CLI_ORDERED,
+        NULL
+    };
+
+    char *rankers[] = {
+        PRTE_CLI_SLOT,
+        PRTE_CLI_NODE,
+        PRTE_CLI_FILL,
+        PRTE_CLI_SPAN,
+        NULL
+    };
+    char *rkquals[] = {
+        NULL
+    };
+
+    char *binders[] = {
+        PRTE_CLI_NONE,
+        PRTE_CLI_HWT,
+        PRTE_CLI_CORE,
+        PRTE_CLI_L1CACHE,
+        PRTE_CLI_L2CACHE,
+        PRTE_CLI_L3CACHE,
+        PRTE_CLI_NUMA,
+        PRTE_CLI_PACKAGE,
+        NULL
+    };
+    char *bndquals[] = {
+        PRTE_CLI_OVERLOAD,
+        PRTE_CLI_NOOVERLOAD,
+        PRTE_CLI_IF_SUPP,
+        NULL
+    };
+
+    char *outputs[] = {
+        PRTE_CLI_TAG,
+        PRTE_CLI_RANK,
+        PRTE_CLI_TIMESTAMP,
+        PRTE_CLI_XML,
+        PRTE_CLI_MERGE_ERROUT,
+        PRTE_CLI_DIR,
+        PRTE_CLI_FILE,
+        NULL
+    };
+    char *outquals[] = {
+        PRTE_CLI_NOCOPY,
+        PRTE_CLI_RAW,
+        NULL
+    };
+
+    char *displays[] = {
+        PRTE_CLI_ALLOC,
+        PRTE_CLI_MAP,
+        PRTE_CLI_BIND,
+        PRTE_CLI_MAPDEV,
+        PRTE_CLI_TOPO,
+        NULL
+    };
+
+    char *rtos[] = {
+        PRTE_CLI_ABORT_NZ,
+        PRTE_CLI_NOLAUNCH,
+        NULL
+    };
+
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, PRTE_CLI_MAPBY)) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, PRTE_CLI_MAPBY);
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "rank-by")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "rank-by");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, PRTE_CLI_RANKBY)) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, PRTE_CLI_RANKBY);
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "bind-to")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "bind-to");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, PRTE_CLI_BINDTO)) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, PRTE_CLI_BINDTO);
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "output")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "output");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, PRTE_CLI_DISPLAY)) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, PRTE_CLI_DISPLAY);
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "display")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "display");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, PRTE_CLI_RTOS)) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, PRTE_CLI_RTOS);
         return PRTE_ERR_SILENT;
+    }
+
+    /* check for synonyms */
+    PMIX_LIST_FOREACH(opt, &cmd_line->instances, pmix_cli_item_t) {
+        if (NULL != (tgt = check_synonym(opt->key))) {
+            if (NULL == opt->values) {
+                // the presence is adequate
+                if (NULL == pmix_cmd_line_get_param(cmd_line, tgt)) {
+                    newopt = PMIX_NEW(pmix_cli_item_t);
+                    newopt->key = strdup(tgt);
+                    pmix_list_append(&cmd_line->instances, &newopt->super);
+                }
+            } else {
+                for (n=0; NULL != opt->values[n]; n++) {
+                    rc = prte_schizo_base_add_directive(cmd_line, opt->key, tgt,
+                                                        opt->values[n], false);
+                    if (PRTE_SUCCESS != rc) {
+                        return rc;
+                    }
+                }
+            }
+        }
     }
 
     /* quick check that we have valid directives */
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "map-by", 0, 0))) {
-        if (NULL != strcasestr(pval->value.data.string, "HWTCPUS")) {
-            hwtcpus = true;
-        }
-        if (!prte_schizo_base_check_directives("map-by", mappers, mapquals, pval->value.data.string)) {
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_MAPBY);
+    if (NULL != opt) {
+        if (!prte_schizo_base_check_directives(PRTE_CLI_MAPBY, mappers, mapquals, opt->values[0])) {
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "rank-by", 0, 0))) {
-        if (!prte_schizo_base_check_directives("rank-by", rankers, rkquals, pval->value.data.string)) {
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_RANKBY);
+    if (NULL != opt) {
+        if (!prte_schizo_base_check_directives(PRTE_CLI_RANKBY, rankers, rkquals, opt->values[0])) {
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "bind-to", 0, 0))) {
-        if (!prte_schizo_base_check_directives("bind-to", binders, bndquals, pval->value.data.string)) {
-            return PRTE_ERR_SILENT;
-        }
-        if (0 == strncasecmp(pval->value.data.string, "HWTHREAD", strlen("HWTHREAD")) && !hwtcpus) {
-            /* if we are told to bind-to hwt, then we have to be treating
-             * hwt's as the allocatable unit */
-            prte_show_help("help-prte-rmaps-base.txt", "invalid-combination", true);
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_BINDTO);
+    if (NULL != opt) {
+        if (!prte_schizo_base_check_directives(PRTE_CLI_BINDTO, binders, bndquals, opt->values[0])) {
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "output", 0, 0))) {
-        if (!prte_schizo_base_check_directives("output", outputs, outquals, pval->value.data.string)) {
-            return PRTE_ERR_SILENT;
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_OUTPUT);
+    if (NULL != opt) {
+        for (n=0; NULL != opt->values[n]; n++) {
+            if (!prte_schizo_base_check_directives(PRTE_CLI_OUTPUT, outputs, outquals, opt->values[n])) {
+                return PRTE_ERR_SILENT;
+            }
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "display", 0, 0))) {
-        if (!prte_schizo_base_check_directives("display", displays, NULL, pval->value.data.string)) {
-            return PRTE_ERR_SILENT;
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_DISPLAY);
+    if (NULL != opt) {
+        for (n=0; NULL != opt->values[n]; n++) {
+            if (!prte_schizo_base_check_directives(PRTE_CLI_DISPLAY, displays, NULL, opt->values[n])) {
+                return PRTE_ERR_SILENT;
+            }
+        }
+    }
+
+    opt = pmix_cmd_line_get_param(cmd_line, PRTE_CLI_RTOS);
+    if (NULL != opt) {
+        for (n=0; NULL != opt->values[n]; n++) {
+            if (!prte_schizo_base_check_directives(PRTE_CLI_RTOS, rtos, NULL, opt->values[n])) {
+                return PRTE_ERR_SILENT;
+            }
+        }
+    }
+    // check too many values given to a single command line option
+    PMIX_LIST_FOREACH(opt, &cmd_line->instances, pmix_cli_item_t) {
+        rc = check_ndirs(opt);
+        if (PRTE_SUCCESS != rc) {
+            return rc;
         }
     }
 
     return PRTE_SUCCESS;
 }
 
-PRTE_CLASS_INSTANCE(prte_schizo_base_active_module_t, prte_list_item_t, NULL, NULL);
+int prte_schizo_base_parse_display(pmix_cli_item_t *opt, void *jinfo)
+{
+    int n, idx;
+    pmix_status_t ret;
+    char **targv, *ptr;
+
+    for (n=0; NULL != opt->values[n]; n++) {
+        targv = pmix_argv_split(opt->values[n], ',');
+        for (idx = 0; idx < pmix_argv_count(targv); idx++) {
+
+            if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_ALLOC)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_DISPLAY_ALLOCATION, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_MAP)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_DISPLAY_MAP, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_MAPDEV)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_DISPLAY_MAP_DETAILED, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_BIND)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_REPORT_BINDINGS, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_TOPO)) {
+                ptr = strchr(targv[idx], '=');
+                if (NULL == ptr) {
+                    /* missing the value or value is invalid */
+                    pmix_show_help("help-prte-rmaps-base.txt", "invalid-value", true,
+                                   "display", "TOPO", targv[idx]);
+                    pmix_argv_free(targv);
+                    return PRTE_ERR_FATAL;
+                }
+                ++ptr;
+                if ('\0' == *ptr) {
+                    /* missing the value or value is invalid */
+                    pmix_show_help("help-prte-rmaps-base.txt", "invalid-value", true,
+                                   "display", "TOPO", targv[idx]);
+                    pmix_argv_free(targv);
+                    return PRTE_ERR_FATAL;
+                }
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_DISPLAY_TOPOLOGY, ptr, PMIX_STRING);
+            }
+        }
+        pmix_argv_free(targv);
+    }
+
+    return PRTE_SUCCESS;
+}
+
+int prte_schizo_base_parse_output(pmix_cli_item_t *opt, void *jinfo)
+{
+    char *outdir=NULL;
+    char *outfile=NULL;
+    char **targv, *ptr, *cptr, **options;
+    int m, n, idx;
+    pmix_status_t ret;
+
+    for (n=0; NULL != opt->values[n]; n++) {
+        targv = pmix_argv_split(opt->values[0], ',');
+        for (idx = 0; NULL != targv[idx]; idx++) {
+            /* check for qualifiers */
+            cptr = strchr(targv[idx], ':');
+            if (NULL != cptr) {
+                *cptr = '\0';
+                ++cptr;
+                /* could be multiple qualifiers, so separate them */
+                options = pmix_argv_split(cptr, ',');
+                for (int m=0; NULL != options[m]; m++) {
+
+                    if (PRTE_CHECK_CLI_OPTION(options[m], PRTE_CLI_NOCOPY)) {
+                        PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_FILE_ONLY, NULL, PMIX_BOOL);
+
+                    } else if (PRTE_CHECK_CLI_OPTION(options[m], PRTE_CLI_PATTERN)) {
+                        PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_FILE_PATTERN, NULL, PMIX_BOOL);
+
+                    } else if (PRTE_CHECK_CLI_OPTION(options[m], PRTE_CLI_RAW)) {
+                        PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_OUTPUT_RAW, NULL, PMIX_BOOL);
+                    }
+                }
+                pmix_argv_free(options);
+            }
+            if (0 == strlen(targv[idx])) {
+                // only qualifiers were given
+                continue;
+            }
+            /* remove any '=' sign in the directive */
+            if (NULL != (ptr = strchr(targv[idx], '='))) {
+                *ptr = '\0';
+                ++ptr; // step over '=' sign
+            }
+            if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_TAG)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_TAG_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_TAG_DET)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_TAG_DETAILED_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_TAG_FULL)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_TAG_FULLNAME_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_RANK)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_RANK_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_TIMESTAMP)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_TIMESTAMP_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_XML)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_XML_OUTPUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_MERGE_ERROUT)) {
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_MERGE_STDERR_STDOUT, NULL, PMIX_BOOL);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_DIR)) {
+                if (NULL == ptr || '\0' == *ptr) {
+                    pmix_show_help("help-prte-rmaps-base.txt",
+                                   "missing-qualifier", true,
+                                   "output", "directory", "directory");
+                    pmix_argv_free(targv);
+                    return PRTE_ERR_FATAL;
+                }
+                if (NULL != outfile) {
+                    pmix_show_help("help-prted.txt", "both-file-and-dir-set", true, outfile, ptr);
+                    pmix_argv_free(targv);
+                    free(outfile);
+                    return PRTE_ERR_FATAL;
+                }
+                /* If the given filename isn't an absolute path, then
+                 * convert it to one so the name will be relative to
+                 * the directory where prun was given as that is what
+                 * the user will have seen */
+                if (!pmix_path_is_absolute(ptr)) {
+                    char cwd[PRTE_PATH_MAX];
+                    if (NULL == getcwd(cwd, sizeof(cwd))) {
+                        pmix_argv_free(targv);
+                        return PRTE_ERR_FATAL;
+                    }
+                    outdir = pmix_os_path(false, cwd, ptr, NULL);
+                } else {
+                    outdir = strdup(ptr);
+                }
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_OUTPUT_TO_DIRECTORY, outdir, PMIX_STRING);
+
+            } else if (PRTE_CHECK_CLI_OPTION(targv[idx], PRTE_CLI_FILE)) {
+                if (NULL == ptr || '\0' == *ptr) {
+                    pmix_show_help("help-prte-rmaps-base.txt",
+                                   "missing-qualifier", true,
+                                   "output", "filename", "filename");
+                    pmix_argv_free(targv);
+                    return PRTE_ERR_FATAL;
+                }
+                if (NULL != outdir) {
+                    pmix_show_help("help-prted.txt", "both-file-and-dir-set", true, ptr, outdir);
+                    pmix_argv_free(targv);
+                    return PRTE_ERR_FATAL;
+                }
+                /* If the given filename isn't an absolute path, then
+                 * convert it to one so the name will be relative to
+                 * the directory where prun was given as that is what
+                 * the user will have seen */
+                if (!pmix_path_is_absolute(ptr)) {
+                    char cwd[PRTE_PATH_MAX];
+                    if (NULL == getcwd(cwd, sizeof(cwd))) {
+                        pmix_argv_free(targv);
+                        return PRTE_ERR_FATAL;
+                    }
+                    outfile = pmix_os_path(false, cwd, ptr, NULL);
+                } else {
+                    outfile = strdup(ptr);
+                }
+                PMIX_INFO_LIST_ADD(ret, jinfo, PMIX_IOF_OUTPUT_TO_FILE, outfile, PMIX_STRING);
+            }
+        }
+        pmix_argv_free(targv);
+    }
+    if (NULL != outdir) {
+        free(outdir);
+    }
+    if (NULL != outfile) {
+        free(outfile);
+    }
+
+    return PRTE_SUCCESS;
+}
+
+PMIX_CLASS_INSTANCE(prte_schizo_base_active_module_t,
+                    pmix_list_item_t, NULL, NULL);

@@ -4,7 +4,7 @@
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2020      IBM Corporation.  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -23,9 +23,9 @@
 #include "src/pmix/pmix-internal.h"
 #include "src/prted/pmix/pmix_server.h"
 #include "src/prted/pmix/pmix_server_internal.h"
-#include "src/util/argv.h"
+#include "src/util/pmix_argv.h"
 #include "src/util/nidmap.h"
-#include "src/util/os_dirpath.h"
+#include "src/util/pmix_os_dirpath.h"
 #include "src/util/output.h"
 #include "src/util/proc_info.h"
 
@@ -37,13 +37,11 @@
 #include "src/mca/plm/base/base.h"
 #include "src/mca/ras/base/base.h"
 #include "src/mca/rmaps/base/base.h"
-#include "src/mca/rml/base/rml_contact.h"
-#include "src/mca/rml/rml.h"
-#include "src/mca/routed/routed.h"
+#include "src/rml/rml.h"
 #include "src/runtime/prte_data_server.h"
 #include "src/runtime/prte_quit.h"
 #include "src/runtime/prte_wait.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 
 #include "src/mca/state/base/base.h"
 #include "src/mca/state/base/state_private.h"
@@ -67,80 +65,92 @@ static void ready_for_debug(int fd, short args, void *cbata);
 /******************
  * DVM module - used when mpirun is persistent
  ******************/
-prte_state_base_module_t prte_state_dvm_module = {init,
-                                                  finalize,
-                                                  prte_state_base_activate_job_state,
-                                                  prte_state_base_add_job_state,
-                                                  prte_state_base_set_job_state_callback,
-                                                  prte_state_base_set_job_state_priority,
-                                                  prte_state_base_remove_job_state,
-                                                  prte_state_base_activate_proc_state,
-                                                  prte_state_base_add_proc_state,
-                                                  prte_state_base_set_proc_state_callback,
-                                                  prte_state_base_set_proc_state_priority,
-                                                  prte_state_base_remove_proc_state};
+prte_state_base_module_t prte_state_dvm_module = {
+    init,
+    finalize,
+    prte_state_base_activate_job_state,
+    prte_state_base_add_job_state,
+    prte_state_base_set_job_state_callback,
+    prte_state_base_set_job_state_priority,
+    prte_state_base_remove_job_state,
+    prte_state_base_activate_proc_state,
+    prte_state_base_add_proc_state,
+    prte_state_base_set_proc_state_callback,
+    prte_state_base_set_proc_state_priority,
+    prte_state_base_remove_proc_state
+};
 
 static void dvm_notify(int sd, short args, void *cbdata);
 
 /* defined default state machine sequence - individual
  * plm's must add a state for launching daemons
  */
-static prte_job_state_t launch_states[] = {PRTE_JOB_STATE_INIT,
-                                           PRTE_JOB_STATE_INIT_COMPLETE,
-                                           PRTE_JOB_STATE_ALLOCATE,
-                                           PRTE_JOB_STATE_ALLOCATION_COMPLETE,
-                                           PRTE_JOB_STATE_DAEMONS_LAUNCHED,
-                                           PRTE_JOB_STATE_DAEMONS_REPORTED,
-                                           PRTE_JOB_STATE_VM_READY,
-                                           PRTE_JOB_STATE_MAP,
-                                           PRTE_JOB_STATE_MAP_COMPLETE,
-                                           PRTE_JOB_STATE_SYSTEM_PREP,
-                                           PRTE_JOB_STATE_LAUNCH_APPS,
-                                           PRTE_JOB_STATE_SEND_LAUNCH_MSG,
-                                           PRTE_JOB_STATE_STARTED,
-                                           PRTE_JOB_STATE_LOCAL_LAUNCH_COMPLETE,
-                                           PRTE_JOB_STATE_READY_FOR_DEBUG,
-                                           PRTE_JOB_STATE_RUNNING,
-                                           PRTE_JOB_STATE_REGISTERED,
-                                           /* termination states */
-                                           PRTE_JOB_STATE_TERMINATED,
-                                           PRTE_JOB_STATE_NOTIFY_COMPLETED,
-                                           PRTE_JOB_STATE_NOTIFIED,
-                                           PRTE_JOB_STATE_ALL_JOBS_COMPLETE};
-static prte_state_cbfunc_t launch_callbacks[] = {prte_plm_base_setup_job,
-                                                 init_complete,
-                                                 prte_ras_base_allocate,
-                                                 prte_plm_base_allocation_complete,
-                                                 prte_plm_base_daemons_launched,
-                                                 prte_plm_base_daemons_reported,
-                                                 vm_ready,
-                                                 prte_rmaps_base_map_job,
-                                                 prte_plm_base_mapping_complete,
-                                                 prte_plm_base_complete_setup,
-                                                 prte_plm_base_launch_apps,
-                                                 prte_plm_base_send_launch_msg,
-                                                 job_started,
-                                                 prte_state_base_local_launch_complete,
-                                                 ready_for_debug,
-                                                 prte_plm_base_post_launch,
-                                                 prte_plm_base_registered,
-                                                 check_complete,
-                                                 dvm_notify,
-                                                 cleanup_job,
-                                                 prte_quit};
+static prte_job_state_t launch_states[] = {
+    PRTE_JOB_STATE_INIT,
+    PRTE_JOB_STATE_INIT_COMPLETE,
+    PRTE_JOB_STATE_ALLOCATE,
+    PRTE_JOB_STATE_ALLOCATION_COMPLETE,
+    PRTE_JOB_STATE_DAEMONS_LAUNCHED,
+    PRTE_JOB_STATE_DAEMONS_REPORTED,
+    PRTE_JOB_STATE_VM_READY,
+    PRTE_JOB_STATE_MAP,
+    PRTE_JOB_STATE_MAP_COMPLETE,
+    PRTE_JOB_STATE_SYSTEM_PREP,
+    PRTE_JOB_STATE_LAUNCH_APPS,
+    PRTE_JOB_STATE_SEND_LAUNCH_MSG,
+    PRTE_JOB_STATE_STARTED,
+    PRTE_JOB_STATE_LOCAL_LAUNCH_COMPLETE,
+    PRTE_JOB_STATE_READY_FOR_DEBUG,
+    PRTE_JOB_STATE_RUNNING,
+    PRTE_JOB_STATE_REGISTERED,
+    /* termination states */
+    PRTE_JOB_STATE_TERMINATED,
+    PRTE_JOB_STATE_NOTIFY_COMPLETED,
+    PRTE_JOB_STATE_NOTIFIED,
+    PRTE_JOB_STATE_ALL_JOBS_COMPLETE
+};
 
-static prte_proc_state_t proc_states[] = {PRTE_PROC_STATE_RUNNING,
-                                          PRTE_PROC_STATE_READY_FOR_DEBUG,
-                                          PRTE_PROC_STATE_REGISTERED,
-                                          PRTE_PROC_STATE_IOF_COMPLETE,
-                                          PRTE_PROC_STATE_WAITPID_FIRED,
-                                          PRTE_PROC_STATE_TERMINATED};
-static prte_state_cbfunc_t proc_callbacks[] = {prte_state_base_track_procs,
-                                               prte_state_base_track_procs,
-                                               prte_state_base_track_procs,
-                                               prte_state_base_track_procs,
-                                               prte_state_base_track_procs,
-                                               prte_state_base_track_procs};
+static prte_state_cbfunc_t launch_callbacks[] = {
+    prte_plm_base_setup_job,
+    init_complete,
+    prte_ras_base_allocate,
+    prte_plm_base_allocation_complete,
+    prte_plm_base_daemons_launched,
+    prte_plm_base_daemons_reported,
+    vm_ready,
+    prte_rmaps_base_map_job,
+    prte_plm_base_mapping_complete,
+    prte_plm_base_complete_setup,
+    prte_plm_base_launch_apps,
+    prte_plm_base_send_launch_msg,
+    job_started,
+    prte_state_base_local_launch_complete,
+    ready_for_debug,
+    prte_plm_base_post_launch,
+    prte_plm_base_registered,
+    check_complete,
+    dvm_notify,
+    cleanup_job,
+    prte_quit
+};
+
+static prte_proc_state_t proc_states[] = {
+    PRTE_PROC_STATE_RUNNING,
+    PRTE_PROC_STATE_READY_FOR_DEBUG,
+    PRTE_PROC_STATE_REGISTERED,
+    PRTE_PROC_STATE_IOF_COMPLETE,
+    PRTE_PROC_STATE_WAITPID_FIRED,
+    PRTE_PROC_STATE_TERMINATED
+};
+
+static prte_state_cbfunc_t proc_callbacks[] = {
+    prte_state_base_track_procs,
+    prte_state_base_track_procs,
+    prte_state_base_track_procs,
+    prte_state_base_track_procs,
+    prte_state_base_track_procs,
+    prte_state_base_track_procs
+};
 
 static void force_quit(int fd, short args, void *cbdata)
 {
@@ -148,7 +158,7 @@ static void force_quit(int fd, short args, void *cbdata)
 
     /* give us a chance to stop the orteds */
     prte_plm.terminate_orteds();
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 /************************
@@ -167,8 +177,8 @@ static int init(void)
     int num_states;
 
     /* setup the state machines */
-    PRTE_CONSTRUCT(&prte_job_states, prte_list_t);
-    PRTE_CONSTRUCT(&prte_proc_states, prte_list_t);
+    PMIX_CONSTRUCT(&prte_job_states, pmix_list_t);
+    PMIX_CONSTRUCT(&prte_proc_states, pmix_list_t);
 
     /* setup the job state machine */
     num_states = sizeof(launch_states) / sizeof(prte_job_state_t);
@@ -180,21 +190,19 @@ static int init(void)
         }
     }
     /* add the termination response */
-    if (PRTE_SUCCESS
-        != (rc = prte_state.add_job_state(PRTE_JOB_STATE_DAEMONS_TERMINATED, prte_quit,
-                                          PRTE_SYS_PRI))) {
+    rc = prte_state.add_job_state(PRTE_JOB_STATE_DAEMONS_TERMINATED, prte_quit, PRTE_SYS_PRI);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
     }
     /* add a default error response */
-    if (PRTE_SUCCESS
-        != (rc = prte_state.add_job_state(PRTE_JOB_STATE_FORCED_EXIT, force_quit,
-                                          PRTE_ERROR_PRI))) {
+    rc = prte_state.add_job_state(PRTE_JOB_STATE_FORCED_EXIT, force_quit, PRTE_ERROR_PRI);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
     }
     /* add callback to report progress, if requested */
-    if (PRTE_SUCCESS
-        != (rc = prte_state.add_job_state(PRTE_JOB_STATE_REPORT_PROGRESS,
-                                          prte_state_base_report_progress, PRTE_ERROR_PRI))) {
+    rc = prte_state.add_job_state(PRTE_JOB_STATE_REPORT_PROGRESS,
+                                  prte_state_base_report_progress, PRTE_ERROR_PRI);
+    if (PRTE_SUCCESS != rc) {
         PRTE_ERROR_LOG(rc);
     }
     if (5 < prte_output_get_verbosity(prte_state_base_framework.framework_output)) {
@@ -206,8 +214,8 @@ static int init(void)
      */
     num_states = sizeof(proc_states) / sizeof(prte_proc_state_t);
     for (i = 0; i < num_states; i++) {
-        if (PRTE_SUCCESS
-            != (rc = prte_state.add_proc_state(proc_states[i], proc_callbacks[i], PRTE_SYS_PRI))) {
+        rc = prte_state.add_proc_state(proc_states[i], proc_callbacks[i], PRTE_SYS_PRI);
+        if (PRTE_SUCCESS != rc) {
             PRTE_ERROR_LOG(rc);
         }
     }
@@ -220,13 +228,9 @@ static int init(void)
 
 static int finalize(void)
 {
-    prte_list_item_t *item;
-
-    /* cleanup the proc state machine */
-    while (NULL != (item = prte_list_remove_first(&prte_proc_states))) {
-        PRTE_RELEASE(item);
-    }
-    PRTE_DESTRUCT(&prte_proc_states);
+    /* cleanup the state machines */
+    PMIX_LIST_DESTRUCT(&prte_proc_states);
+    PMIX_LIST_DESTRUCT(&prte_job_states);
 
     return PRTE_SUCCESS;
 }
@@ -246,12 +250,12 @@ static void init_complete(int sd, short args, void *cbdata)
 {
     prte_state_caddy_t *caddy = (prte_state_caddy_t *) cbdata;
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PMIX_ACQUIRE_OBJECT(caddy);
 
     /* need to go thru allocate step in case someone wants to
      * expand the DVM */
     PRTE_ACTIVATE_JOB_STATE(caddy->jdata, PRTE_JOB_STATE_ALLOCATE);
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void vm_ready(int fd, short args, void *cbdata)
@@ -266,7 +270,7 @@ static void vm_ready(int fd, short args, void *cbdata)
     pmix_value_t *val;
     pmix_status_t ret;
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PMIX_ACQUIRE_OBJECT(caddy);
     /* if this is my job, then we are done */
     if (prte_get_attribute(&caddy->jdata->attributes, PRTE_JOB_LAUNCHED_DAEMONS, NULL, PMIX_BOOL)) {
         /* if there is more than one daemon in the job, then there
@@ -284,22 +288,15 @@ static void vm_ready(int fd, short args, void *cbdata)
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
                 return;
             }
-            /* provide the info on the capabilities of each node */
-            if (PRTE_SUCCESS != (rc = prte_util_pass_node_info(&buf))) {
-                PRTE_ERROR_LOG(rc);
-                PMIX_DATA_BUFFER_DESTRUCT(&buf);
-                PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
-                return;
-            }
             /* get wireup info for daemons */
             jptr = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
             for (v = 0; v < jptr->procs->size; v++) {
-                if (NULL == (dmn = (prte_proc_t *) prte_pointer_array_get_item(jptr->procs, v))) {
+                if (NULL == (dmn = (prte_proc_t *) pmix_pointer_array_get_item(jptr->procs, v))) {
                     continue;
                 }
                 val = NULL;
-                if (PMIX_SUCCESS != (ret = PMIx_Get(&dmn->name, PMIX_PROC_URI, NULL, 0, &val))
-                    || NULL == val) {
+                if (PMIX_SUCCESS != (ret = PMIx_Get(&dmn->name, PMIX_PROC_URI, NULL, 0, &val)) ||
+                    NULL == val) {
                     PMIX_ERROR_LOG(ret);
                     PMIX_DATA_BUFFER_DESTRUCT(&buf);
                     PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
@@ -353,15 +350,15 @@ static void vm_ready(int fd, short args, void *cbdata)
             prte_state_base_parent_fd = -1;
         }
         for (i = 0; i < prte_cache->size; i++) {
-            jptr = (prte_job_t *) prte_pointer_array_get_item(prte_cache, i);
+            jptr = (prte_job_t *) pmix_pointer_array_get_item(prte_cache, i);
             if (NULL != jptr) {
-                prte_pointer_array_set_item(prte_cache, i, NULL);
+                pmix_pointer_array_set_item(prte_cache, i, NULL);
                 prte_plm.spawn(jptr);
             }
         }
         /* progress the job */
         caddy->jdata->state = PRTE_JOB_STATE_VM_READY;
-        PRTE_RELEASE(caddy);
+        PMIX_RELEASE(caddy);
         return;
     }
 
@@ -369,7 +366,7 @@ static void vm_ready(int fd, short args, void *cbdata)
     if (PRTE_SUCCESS != prte_filem.preposition_files(caddy->jdata, files_ready, caddy->jdata)) {
         PRTE_ACTIVATE_JOB_STATE(caddy->jdata, PRTE_JOB_STATE_FILES_POSN_FAILED);
     }
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void job_started(int fd, short args, void *cbdata)
@@ -408,7 +405,7 @@ static void job_started(int fd, short args, void *cbdata)
         PMIX_INFO_FREE(iptr, 5);
     }
 
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void ready_for_debug(int fd, short args, void *cbdata)
@@ -442,7 +439,7 @@ static void ready_for_debug(int fd, short args, void *cbdata)
     /* pass the nspace of the job */
     PMIX_INFO_LIST_ADD(rc, tinfo, PMIX_NSPACE, jdata->nspace, PMIX_STRING);
     for (n=0; n < jdata->apps->size; n++) {
-        app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, n);
+        app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, n);
         if (NULL == app) {
             continue;
         }
@@ -452,7 +449,7 @@ static void ready_for_debug(int fd, short args, void *cbdata)
            free(name);
         }
         /* pass the argv from each app */
-        name = prte_argv_join(app->argv, ' ');
+        name = pmix_argv_join(app->argv, ' ');
         PMIX_INFO_LIST_ADD(rc, tinfo, PMIX_APP_ARGV, name, PMIX_STRING);
         free(name);
     }
@@ -483,14 +480,22 @@ static void ready_for_debug(int fd, short args, void *cbdata)
     PMIX_INFO_FREE(iptr, ninfo);
 
 DONE:
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void opcbfunc(pmix_status_t status, void *cbdata)
 {
     prte_pmix_lock_t *lk = (prte_pmix_lock_t *) cbdata;
 
-    PRTE_POST_OBJECT(lk);
+    PMIX_POST_OBJECT(lk);
+    lk->status = prte_pmix_convert_status(status);
+    PRTE_PMIX_WAKEUP_THREAD(lk);
+}
+static void lkcbfunc(pmix_status_t status, void *cbdata)
+{
+    prte_pmix_lock_t *lk = (prte_pmix_lock_t *) cbdata;
+
+    PMIX_POST_OBJECT(lk);
     lk->status = prte_pmix_convert_status(status);
     PRTE_PMIX_WAKEUP_THREAD(lk);
 }
@@ -507,12 +512,18 @@ static void check_complete(int fd, short args, void *cbdata)
     prte_pmix_lock_t lock;
     uint8_t command = PRTE_PMIX_PURGE_PROC_CMD;
     pmix_data_buffer_t *buf;
-    prte_pointer_array_t procs;
+    pmix_pointer_array_t procs;
     char *tmp;
     prte_timer_t *timer;
     prte_app_context_t *app;
+    hwloc_obj_t obj;
+    hwloc_obj_type_t type;
+    hwloc_cpuset_t boundcpus, tgt;
+    unsigned n;
+    uint16_t u16, *u16ptr = &u16;
+    bool takeall;
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PMIX_ACQUIRE_OBJECT(caddy);
     jdata = caddy->jdata;
 
     prte_output_verbose(2, prte_state_base_framework.framework_output,
@@ -520,11 +531,11 @@ static void check_complete(int fd, short args, void *cbdata)
                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                         (NULL == jdata) ? "NULL" : PRTE_JOBID_PRINT(jdata->nspace));
 
-    if (NULL != jdata
-        && prte_get_attribute(&jdata->attributes, PRTE_JOB_TIMEOUT_EVENT, (void **) &timer,
-                              PMIX_POINTER)) {
+    if (NULL != jdata &&
+        prte_get_attribute(&jdata->attributes, PRTE_JOB_TIMEOUT_EVENT, (void **) &timer, PMIX_POINTER)) {
         /* timer is an prte_timer_t object */
-        PRTE_RELEASE(timer);
+        prte_event_evtimer_del(timer->ev);
+        PMIX_RELEASE(timer);
         prte_remove_attribute(&jdata->attributes, PRTE_JOB_TIMEOUT_EVENT);
     }
 
@@ -534,7 +545,7 @@ static void check_complete(int fd, short args, void *cbdata)
             (2, prte_state_base_framework.framework_output,
              "%s state:dvm:check_job_complete - received NULL job, checking daemons",
              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
-        if (0 == prte_routed.num_routes()) {
+        if (0 == pmix_list_get_size(&prte_rml_base.children)) {
             /* orteds are done! */
             PRTE_OUTPUT_VERBOSE((2, prte_state_base_framework.framework_output,
                                  "%s prteds complete - exiting",
@@ -543,11 +554,12 @@ static void check_complete(int fd, short args, void *cbdata)
                 jdata = prte_get_job_data_object(PRTE_PROC_MY_NAME->nspace);
             }
             PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_DAEMONS_TERMINATED);
-            PRTE_RELEASE(caddy);
+            PMIX_RELEASE(caddy);
             prte_dvm_ready = false;
             return;
         }
-        PRTE_RELEASE(caddy);
+        prte_plm.terminate_orteds();
+        PMIX_RELEASE(caddy);
         return;
     }
 
@@ -581,14 +593,14 @@ static void check_complete(int fd, short args, void *cbdata)
 
     /* cleanup the procs as these are gone */
     for (i = 0; i < prte_local_children->size; i++) {
-        if (NULL == (proc = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, i))) {
+        if (NULL == (proc = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, i))) {
             continue;
         }
         /* if this child is part of the job... */
         if (PMIX_CHECK_NSPACE(proc->name.nspace, jdata->nspace)) {
             /* clear the entry in the local children */
-            prte_pointer_array_set_item(prte_local_children, i, NULL);
-            PRTE_RELEASE(proc); // maintain accounting
+            pmix_pointer_array_set_item(prte_local_children, i, NULL);
+            PMIX_RELEASE(proc); // maintain accounting
         }
     }
 
@@ -611,13 +623,30 @@ static void check_complete(int fd, short args, void *cbdata)
             char *msg;
             msg = prte_dump_aborted_procs(jdata);
             if (NULL != msg) {
-                prte_output(prte_clean_output, "%s", msg);
+                pmix_byte_object_t bo;
+                PMIX_BYTE_OBJECT_CONSTRUCT(&bo);
+                bo.bytes = (char *) msg;
+                bo.size = strlen(msg) + 1;
+                PRTE_PMIX_CONSTRUCT_LOCK(&lock);
+                rc = PMIx_server_IOF_deliver(&prte_process_info.myproc,
+                                             PMIX_FWD_STDDIAG_CHANNEL,
+                                             &bo, NULL, 0, lkcbfunc, (void *) &lock);
+                if (PMIX_SUCCESS != rc) {
+                    PMIX_ERROR_LOG(rc);
+                } else {
+                    /* wait for completion */
+                    PRTE_PMIX_WAIT_THREAD(&lock);
+                    if (PMIX_SUCCESS != lock.status) {
+                        PMIX_ERROR_LOG(lock.status);
+                    }
+                }
+                PRTE_PMIX_DESTRUCT_LOCK(&lock);
                 free(msg);
             }
         }
         /* if all of the jobs we are running are done, then shut us down */
         for (i = 0; i < prte_job_data->size; i++) {
-            jptr = (prte_job_t *) prte_pointer_array_get_item(prte_job_data, i);
+            jptr = (prte_job_t *) pmix_pointer_array_get_item(prte_job_data, i);
             if (NULL == jptr) {
                 continue;
             }
@@ -644,7 +673,7 @@ static void check_complete(int fd, short args, void *cbdata)
         /* if we fell thru to this point, then nobody is still
          * alive except the daemons, so just shut us down */
         prte_plm.terminate_orteds();
-        PRTE_RELEASE(caddy);
+        PMIX_RELEASE(caddy);
         return;
     }
 
@@ -674,11 +703,10 @@ static void check_complete(int fd, short args, void *cbdata)
             goto release;
         }
         /* send it to the data server */
-        rc = prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, buf, PRTE_RML_TAG_DATA_SERVER,
-                                     prte_rml_send_callback, NULL);
+        PRTE_RML_SEND(rc, PRTE_PROC_MY_NAME->rank, buf, PRTE_RML_TAG_DATA_SERVER);
         if (PRTE_SUCCESS != rc) {
             PRTE_ERROR_LOG(rc);
-            PRTE_RELEASE(buf);
+            PMIX_DATA_BUFFER_RELEASE(buf);
         }
     }
 
@@ -693,27 +721,72 @@ release:
      */
     if (NULL != jdata->map) {
         map = jdata->map;
+        takeall = false;
+        if (prte_get_attribute(&jdata->attributes, PRTE_JOB_HWT_CPUS, NULL, PMIX_BOOL)) {
+            type = HWLOC_OBJ_PU;
+        } else {
+            type = HWLOC_OBJ_CORE;
+        }
+        if (prte_get_attribute(&jdata->attributes, PRTE_JOB_PES_PER_PROC, NULL, PMIX_UINT16) ||
+            PRTE_MAPPING_BYUSER == PRTE_GET_MAPPING_POLICY(map->mapping) ||
+            PRTE_MAPPING_SEQ == PRTE_GET_MAPPING_POLICY(map->mapping)) {
+            takeall = true;
+        }
+        boundcpus = hwloc_bitmap_alloc();
         for (index = 0; index < map->nodes->size; index++) {
-            if (NULL == (node = (prte_node_t *) prte_pointer_array_get_item(map->nodes, index))) {
+            node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, index);
+            if (NULL == node) {
                 continue;
             }
             PRTE_OUTPUT_VERBOSE((2, prte_state_base_framework.framework_output,
                                  "%s state:dvm releasing procs from node %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), node->name));
             for (i = 0; i < node->procs->size; i++) {
-                if (NULL == (proc = (prte_proc_t *) prte_pointer_array_get_item(node->procs, i))) {
+                proc = (prte_proc_t *) pmix_pointer_array_get_item(node->procs, i);
+                if (NULL == proc) {
                     continue;
                 }
                 if (!PMIX_CHECK_NSPACE(proc->name.nspace, jdata->nspace)) {
                     /* skip procs from another job */
                     continue;
                 }
-                app = (prte_app_context_t*) prte_pointer_array_get_item(jdata->apps, proc->app_idx);
+                app = (prte_app_context_t*) pmix_pointer_array_get_item(jdata->apps, proc->app_idx);
                 if (!PRTE_FLAG_TEST(app, PRTE_APP_FLAG_TOOL) &&
                     !PRTE_FLAG_TEST(jdata, PRTE_JOB_FLAG_TOOL)) {
                     node->slots_inuse--;
                     node->num_procs--;
                     node->next_node_rank--;
+                }
+                /* release the resources held by the proc - only the first
+                 * cpu in the proc's cpuset was used to mark usage */
+                if (NULL != proc->cpuset) {
+                    if (0 != (rc = hwloc_bitmap_list_sscanf(boundcpus, proc->cpuset))) {
+                        prte_output(0, "hwloc_bitmap_sscanf returned %s for the string %s",
+                                    prte_strerror(rc), proc->cpuset);
+                        continue;
+                    }
+                    if (takeall) {
+                        tgt = boundcpus;
+                    } else {
+                        /* we only want to restore the first CPU of whatever region
+                         * the proc was bound to, so we have to first narrow the
+                         * bitmap down to only that region */
+                        hwloc_bitmap_andnot(prte_rmaps_base.available, boundcpus, node->available);
+                        /* the set bits in the result are the bound cpus that are still
+                         * marked as in-use */
+                        obj = hwloc_get_obj_inside_cpuset_by_type(node->topology->topo,
+                                                                  prte_rmaps_base.available, type, 0);
+                        if (NULL == obj) {
+                            prte_output(0, "COULD NOT GET BOUND CPU FOR RESOURCE RELEASE");
+                            continue;
+                        }
+#if HWLOC_API_VERSION < 0x20000
+                        tgt = obj->allowed_cpuset;
+#else
+                        tgt = obj->cpuset;
+#endif
+                    }
+                    hwloc_bitmap_or(node->available, node->available, tgt);
                 }
 
                 PRTE_OUTPUT_VERBOSE((2, prte_state_base_framework.framework_output,
@@ -721,18 +794,19 @@ release:
                                      PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                      PRTE_NAME_PRINT(&proc->name), node->name));
                 /* set the entry in the node array to NULL */
-                prte_pointer_array_set_item(node->procs, i, NULL);
+                pmix_pointer_array_set_item(node->procs, i, NULL);
                 /* release the proc once for the map entry */
-                PRTE_RELEASE(proc);
+                PMIX_RELEASE(proc);
             }
             /* set the node location to NULL */
-            prte_pointer_array_set_item(map->nodes, index, NULL);
+            pmix_pointer_array_set_item(map->nodes, index, NULL);
             /* maintain accounting */
-            PRTE_RELEASE(node);
+            PMIX_RELEASE(node);
             /* flag that the node is no longer in a map */
             PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
         }
-        PRTE_RELEASE(map);
+        hwloc_bitmap_free(boundcpus);
+        PMIX_RELEASE(map);
         jdata->map = NULL;
     }
 
@@ -743,30 +817,30 @@ release:
 
     /* if this job was a launcher, then we need to abort all of its
      * child jobs that might still be running */
-    if (0 < prte_list_get_size(&jdata->children)) {
-        PRTE_CONSTRUCT(&procs, prte_pointer_array_t);
-        prte_pointer_array_init(&procs, 1, INT_MAX, 1);
-        PRTE_LIST_FOREACH(jptr, &jdata->children, prte_job_t)
+    if (0 < pmix_list_get_size(&jdata->children)) {
+        PMIX_CONSTRUCT(&procs, pmix_pointer_array_t);
+        pmix_pointer_array_init(&procs, 1, INT_MAX, 1);
+        PMIX_LIST_FOREACH(jptr, &jdata->children, prte_job_t)
         {
-            proc = PRTE_NEW(prte_proc_t);
+            proc = PMIX_NEW(prte_proc_t);
             PMIX_LOAD_PROCID(&proc->name, jptr->nspace, PMIX_RANK_WILDCARD);
-            prte_pointer_array_add(&procs, proc);
+            pmix_pointer_array_add(&procs, proc);
         }
         prte_plm.terminate_procs(&procs);
         for (i = 0; i < procs.size; i++) {
-            if (NULL != (proc = (prte_proc_t *) prte_pointer_array_get_item(&procs, i))) {
-                PRTE_RELEASE(proc);
+            if (NULL != (proc = (prte_proc_t *) pmix_pointer_array_get_item(&procs, i))) {
+                PMIX_RELEASE(proc);
             }
         }
-        PRTE_DESTRUCT(&procs);
+        PMIX_DESTRUCT(&procs);
     }
 
     /* remove the session directory tree */
-    if (0 > prte_asprintf(&tmp, "%s/%u", prte_process_info.jobfam_session_dir,
+    if (0 > pmix_asprintf(&tmp, "%s/%u", prte_process_info.jobfam_session_dir,
                           PRTE_LOCAL_JOBID(jdata->nspace))) {
         PRTE_ERROR_LOG(PRTE_ERR_OUT_OF_RESOURCE);
     } else {
-        prte_os_dirpath_destroy(tmp, true, NULL);
+        pmix_os_dirpath_destroy(tmp, true, NULL);
         free(tmp);
     }
 
@@ -779,21 +853,21 @@ release:
         jdata->state = PRTE_JOB_STATE_NOTIFIED;
     }
 
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void cleanup_job(int sd, short args, void *cbdata)
 {
     prte_state_caddy_t *caddy = (prte_state_caddy_t *) cbdata;
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PMIX_ACQUIRE_OBJECT(caddy);
 
     if (terminate_dvm && !dvm_terminated) {
         dvm_terminated = true;
         prte_plm.terminate_orteds();
     }
 
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 static void dvm_notify(int sd, short args, void *cbdata)
@@ -830,8 +904,8 @@ static void dvm_notify(int sd, short args, void *cbdata)
         rc = jdata->exit_code;
     }
 
-    if (0 == rc
-        && prte_get_attribute(&jdata->attributes, PRTE_JOB_SILENT_TERMINATION, NULL, PMIX_BOOL)) {
+    if (0 == rc &&
+        prte_get_attribute(&jdata->attributes, PRTE_JOB_SILENT_TERMINATION, NULL, PMIX_BOOL)) {
         notify = false;
     }
     /* if the jobid matches that of the requestor, then don't notify */
@@ -958,33 +1032,35 @@ static void dvm_notify(int sd, short args, void *cbdata)
         PMIX_PROC_FREE(sig.signature, 1);
     }
 
-    /* now ensure that _all_ daemons know that this job has terminated so even
-     * those that did not participate in it will know to cleanup the resources
-     * they assigned to the job. This is necessary now that the mapping function
-     * has been moved to the backend daemons - otherwise, non-participating daemons
-     * retain the slot assignments on the participating daemons, and then incorrectly
-     * map subsequent jobs thinking those nodes are still "busy" */
-    PMIX_DATA_BUFFER_CREATE(reply);
-    command = PRTE_DAEMON_DVM_CLEANUP_JOB_CMD;
-    rc = PMIx_Data_pack(NULL, reply, &command, 1, PMIX_UINT8);
-    if (PMIX_SUCCESS != rc) {
-        PMIX_ERROR_LOG(rc);
+    if (prte_persistent) {
+        /* now ensure that _all_ daemons know that this job has terminated so even
+         * those that did not participate in it will know to cleanup the resources
+         * they assigned to the job. This is necessary now that the mapping function
+         * has been moved to the backend daemons - otherwise, non-participating daemons
+         * retain the slot assignments on the participating daemons, and then incorrectly
+         * map subsequent jobs thinking those nodes are still "busy" */
+        PMIX_DATA_BUFFER_CREATE(reply);
+        command = PRTE_DAEMON_DVM_CLEANUP_JOB_CMD;
+        rc = PMIx_Data_pack(NULL, reply, &command, 1, PMIX_UINT8);
+        if (PMIX_SUCCESS != rc) {
+            PMIX_ERROR_LOG(rc);
+            PMIX_DATA_BUFFER_RELEASE(reply);
+            return;
+        }
+        rc = PMIx_Data_pack(NULL, reply, &jdata->nspace, 1, PMIX_PROC_NSPACE);
+        if (PMIX_SUCCESS != rc) {
+            PMIX_ERROR_LOG(rc);
+            PMIX_DATA_BUFFER_RELEASE(reply);
+            return;
+        }
+        PMIX_PROC_CREATE(sig.signature, 1);
+        PMIX_LOAD_PROCID(&sig.signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
+        sig.sz = 1;
+        prte_grpcomm.xcast(&sig, PRTE_RML_TAG_DAEMON, reply);
         PMIX_DATA_BUFFER_RELEASE(reply);
-        return;
+        PMIX_PROC_FREE(sig.signature, 1);
+        PMIX_RELEASE(caddy);
     }
-    rc = PMIx_Data_pack(NULL, reply, &jdata->nspace, 1, PMIX_PROC_NSPACE);
-    if (PMIX_SUCCESS != rc) {
-        PMIX_ERROR_LOG(rc);
-        PMIX_DATA_BUFFER_RELEASE(reply);
-        return;
-    }
-    PMIX_PROC_CREATE(sig.signature, 1);
-    PMIX_LOAD_PROCID(&sig.signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
-    sig.sz = 1;
-    prte_grpcomm.xcast(&sig, PRTE_RML_TAG_DAEMON, reply);
-    PMIX_DATA_BUFFER_RELEASE(reply);
-    PMIX_PROC_FREE(sig.signature, 1);
-    PRTE_RELEASE(caddy);
 
     // We are done with our use of job data and have notified the other daemons
     if (notify) {

@@ -19,7 +19,7 @@
  *                         and Technology (RIST).  All rights reserved.
  * Copyright (c) 2017      Mellanox Technologies Ltd. All rights reserved.
  * Copyright (c) 2017-2020 IBM Corporation.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -49,12 +49,12 @@
 #include "prte_stdint.h"
 #include "src/hwloc/hwloc-internal.h"
 #include "src/pmix/pmix-internal.h"
-#include "src/util/argv.h"
-#include "src/util/os_dirpath.h"
-#include "src/util/os_path.h"
-#include "src/util/path.h"
-#include "src/util/printf.h"
-#include "src/util/prte_environ.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_os_dirpath.h"
+#include "src/util/pmix_os_path.h"
+#include "src/util/pmix_path.h"
+#include "src/util/pmix_printf.h"
+#include "src/util/pmix_environ.h"
 #include "src/util/sys_limits.h"
 
 #include "src/mca/errmgr/errmgr.h"
@@ -67,24 +67,23 @@
 #include "src/mca/rmaps/base/base.h"
 #include "src/mca/rmaps/base/rmaps_private.h"
 #include "src/mca/rmaps/rmaps_types.h"
-#include "src/mca/rml/base/rml_contact.h"
-#include "src/mca/rml/rml.h"
-#include "src/mca/routed/routed.h"
+#include "src/rml/rml_contact.h"
+#include "src/rml/rml.h"
 #include "src/mca/rtc/rtc.h"
-#include "src/mca/schizo/schizo.h"
+#include "src/mca/schizo/base/base.h"
 #include "src/mca/state/state.h"
 
 #include "src/prted/pmix/pmix_server.h"
 #include "src/prted/prted.h"
 #include "src/runtime/prte_globals.h"
 #include "src/runtime/prte_wait.h"
-#include "src/threads/threads.h"
-#include "src/util/context_fns.h"
+#include "src/threads/pmix_threads.h"
+#include "src/util/pmix_context_fns.h"
 #include "src/util/name_fns.h"
 #include "src/util/nidmap.h"
 #include "src/util/proc_info.h"
 #include "src/util/session_dir.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/mca/odls/base/base.h"
 #include "src/mca/odls/base/odls_private.h"
@@ -104,6 +103,7 @@ static void setup_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninfo,
     pmix_data_buffer_t pbuf;
     pmix_byte_object_t pbo;
     int rc = PRTE_SUCCESS;
+    PRTE_HIDE_UNUSED_PARAMS(status);
 
     /* release any info */
     if (NULL != cd->info) {
@@ -199,7 +199,7 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
         }
         PMIX_DATA_BUFFER_CONSTRUCT(&jobdata);
         for (i = 1; i < prte_job_data->size; i++) {
-            jptr = prte_pointer_array_get_item(prte_job_data, i);
+            jptr = pmix_pointer_array_get_item(prte_job_data, i);
             if (NULL == jptr) {
                 continue;
             }
@@ -217,7 +217,7 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
                 /* pack the location of each proc */
                 for (n = 0; n < jptr->procs->size; n++) {
                     if (NULL
-                        == (proc = (prte_proc_t *) prte_pointer_array_get_item(jptr->procs, n))) {
+                        == (proc = (prte_proc_t *) pmix_pointer_array_get_item(jptr->procs, n))) {
                         continue;
                     }
                     rc = PMIx_Data_pack(NULL, &priorjob, &proc->parent, 1, PMIX_PROC_RANK);
@@ -276,35 +276,27 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
         return rc;
     }
 
-    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* compute and pack the ppn */
-        if (PRTE_SUCCESS != (rc = prte_util_generate_ppn(jdata, buffer))) {
-            PRTE_ERROR_LOG(rc);
-            return rc;
-        }
-    }
-
     /* assemble the node and proc map info */
     list = NULL;
     procs = NULL;
     PMIX_INFO_LIST_START(ilist);
     for (i = 0; i < map->nodes->size; i++) {
         micro = NULL;
-        if (NULL != (node = (prte_node_t *) prte_pointer_array_get_item(map->nodes, i))) {
-            prte_argv_append_nosize(&list, node->name);
+        if (NULL != (node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, i))) {
+            pmix_argv_append_nosize(&list, node->name);
             /* assemble all the ranks for this job that are on this node */
             for (k = 0; k < node->procs->size; k++) {
-                if (NULL != (pptr = (prte_proc_t *) prte_pointer_array_get_item(node->procs, k))) {
+                if (NULL != (pptr = (prte_proc_t *) pmix_pointer_array_get_item(node->procs, k))) {
                     if (PMIX_CHECK_NSPACE(jdata->nspace, pptr->name.nspace)) {
-                        prte_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
+                        pmix_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
                     }
                 }
             }
             /* assemble the rank/node map */
             if (NULL != micro) {
-                tmp = prte_argv_join(micro, ',');
-                prte_argv_free(micro);
-                prte_argv_append_nosize(&procs, tmp);
+                tmp = pmix_argv_join(micro, ',');
+                pmix_argv_free(micro);
+                pmix_argv_append_nosize(&procs, tmp);
                 free(tmp);
             }
         }
@@ -312,8 +304,8 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
 
     /* let the PMIx server generate the nodemap regex */
     if (NULL != list) {
-        tmp = prte_argv_join(list, ',');
-        prte_argv_free(list);
+        tmp = pmix_argv_join(list, ',');
+        pmix_argv_free(list);
         list = NULL;
         if (PMIX_SUCCESS != (ret = PMIx_generate_regex(tmp, &regex))) {
             PMIX_ERROR_LOG(ret);
@@ -328,8 +320,8 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
 
     /* let the PMIx server generate the procmap regex */
     if (NULL != procs) {
-        tmp = prte_argv_join(procs, ';');
-        prte_argv_free(procs);
+        tmp = pmix_argv_join(procs, ';');
+        pmix_argv_free(procs);
         procs = NULL;
         if (PMIX_SUCCESS != (ret = PMIx_generate_ppn(tmp, &regex))) {
             PMIX_ERROR_LOG(ret);
@@ -344,7 +336,7 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
 
     /* add in the personality */
     if (NULL != jdata->personality) {
-        tmp = prte_argv_join(jdata->personality, ',');
+        tmp = pmix_argv_join(jdata->personality, ',');
         PMIX_INFO_LIST_ADD(ret, ilist, PMIX_PERSONALITY, tmp, PMIX_STRING);
         free(tmp);
     }
@@ -400,6 +392,7 @@ int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *buffer, pmix_n
 static void ls_cbunc(pmix_status_t status, void *cbdata)
 {
     prte_pmix_lock_t *lock = (prte_pmix_lock_t *) cbdata;
+    PRTE_HIDE_UNUSED_PARAMS(status);
     PRTE_PMIX_WAKEUP_THREAD(lock);
 }
 
@@ -423,6 +416,7 @@ int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix
     pmix_byte_object_t bo, pbo;
     size_t m;
     pmix_envar_t envt;
+    char *tmp;
 
     PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
                          "%s odls:constructing child list", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
@@ -487,17 +481,17 @@ int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix
             if (NULL != prte_get_job_data_object(jdata->nspace)) {
                 /* yep - so we can drop this copy */
                 jdata->index = -1;
-                PRTE_RELEASE(jdata);
+                PMIX_RELEASE(jdata);
             } else {
                 /* nope - add it */
                 prte_set_job_data_object(jdata);
                 /* unpack the location of each proc in this job */
                 for (v = 0; v < jdata->num_procs; v++) {
                     if (NULL
-                        == (pptr = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, v))) {
-                        pptr = PRTE_NEW(prte_proc_t);
+                        == (pptr = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, v))) {
+                        pptr = PMIX_NEW(prte_proc_t);
                         PMIX_LOAD_PROCID(&pptr->name, jdata->nspace, v);
-                        prte_pointer_array_set_item(jdata->procs, v, pptr);
+                        pmix_pointer_array_set_item(jdata->procs, v, pptr);
                     }
                     cnt = 1;
                     rc = PMIx_Data_unpack(NULL, &jdbuf, &dmnvpid, &cnt, PMIX_PROC_RANK);
@@ -509,7 +503,7 @@ int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix
                     }
                     /* lookup the daemon */
                     if (NULL
-                        == (dmn = (prte_proc_t *) prte_pointer_array_get_item(daemons->procs,
+                        == (dmn = (prte_proc_t *) pmix_pointer_array_get_item(daemons->procs,
                                                                               dmnvpid))) {
                         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                         rc = PRTE_ERR_NOT_FOUND;
@@ -518,7 +512,7 @@ int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *buffer, pmix
                         goto REPORT_ERROR;
                     }
                     /* connect the two */
-                    PRTE_RETAIN(dmn->node);
+                    PMIX_RETAIN(dmn->node);
                     pptr->node = dmn->node;
                 }
             }
@@ -564,7 +558,7 @@ next:
          * protect the array, and then release the object to free
          * the storage */
         jdata->index = -1;
-        PRTE_RELEASE(jdata);
+        PMIX_RELEASE(jdata);
         /* get the correct job object - it will be completely filled out */
         if (NULL == (jdata = prte_get_job_data_object(*job))) {
             PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
@@ -576,42 +570,26 @@ next:
 
         /* ensure the map object is present */
         if (NULL == jdata->map) {
-            jdata->map = PRTE_NEW(prte_job_map_t);
+            jdata->map = PMIX_NEW(prte_job_map_t);
         }
     }
-
-    /* if the job is fully described, then mpirun will have computed
-     * and sent us the complete array of procs in the prte_job_t, so we
-     * don't need to do anything more here */
-    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* load the ppn info into the job and node arrays - the
-         * function will ignore the data on the HNP as it already
-         * has the info */
-        if (PRTE_SUCCESS != (rc = prte_util_decode_ppn(jdata, buffer))) {
-            PRTE_ERROR_LOG(rc);
-            goto REPORT_ERROR;
+    /* get the associated schizo module */
+    if (NULL != jdata->personality) {
+        tmp = pmix_argv_join(jdata->personality, ',');
+    } else {
+        tmp = NULL;
+    }
+    jdata->schizo = (struct prte_schizo_base_module_t*)prte_schizo_base_detect_proxy(tmp);
+    if (NULL == jdata->schizo) {
+        pmix_show_help("help-schizo-base.txt", "no-proxy", true,
+                       prte_tool_basename, (NULL == tmp) ? "NULL" : tmp);
+        if (NULL != tmp) {
+            free(tmp);
         }
-
-        if (!PRTE_PROC_IS_MASTER) {
-            /* assign locations to the procs */
-            if (PRTE_SUCCESS != (rc = prte_rmaps_base_assign_locations(jdata))) {
-                PRTE_ERROR_LOG(rc);
-                goto REPORT_ERROR;
-            }
-
-            /* compute the ranks and add the proc objects
-             * to the jdata->procs array */
-            if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_vpids(jdata))) {
-                PRTE_ERROR_LOG(rc);
-                goto REPORT_ERROR;
-            }
-        }
-
-        /* and finally, compute the local and node ranks */
-        if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_local_ranks(jdata))) {
-            PRTE_ERROR_LOG(rc);
-            goto REPORT_ERROR;
-        }
+        return 1;
+    }
+    if (NULL != tmp) {
+        free(tmp);
     }
 
     /* unpack the byte object containing any application setup info - there
@@ -684,17 +662,15 @@ next:
      * we need to "wireup" the procs to their nodes so other utilities can
      * locate them */
     for (n = 0; n < jdata->procs->size; n++) {
-        if (NULL == (pptr = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, n))) {
+        if (NULL == (pptr = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, n))) {
             continue;
         }
         if (PRTE_PROC_STATE_UNDEF == pptr->state) {
             /* not ready for use yet */
             continue;
         }
-        if (!PRTE_PROC_IS_MASTER
-            && prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-            /* the parser will have already made the connection, but the fully described
-             * case won't have done it, so connect the proc to its node here */
+        if (!PRTE_PROC_IS_MASTER) {
+            /* connect the proc to its node here */
             prte_output_verbose(5, prte_odls_base_framework.framework_output,
                                 "%s GETTING DAEMON FOR PROC %s WITH PARENT %s",
                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&pptr->name),
@@ -706,28 +682,28 @@ next:
             }
             /* connect the proc to its node object */
             if (NULL
-                == (dmn = (prte_proc_t *) prte_pointer_array_get_item(daemons->procs,
+                == (dmn = (prte_proc_t *) pmix_pointer_array_get_item(daemons->procs,
                                                                       pptr->parent))) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 rc = PRTE_ERR_NOT_FOUND;
                 goto REPORT_ERROR;
             }
-            PRTE_RETAIN(dmn->node);
+            PMIX_RETAIN(dmn->node);
             pptr->node = dmn->node;
             /* add the node to the job map, if needed */
             if (!PRTE_FLAG_TEST(pptr->node, PRTE_NODE_FLAG_MAPPED)) {
-                PRTE_RETAIN(pptr->node);
-                prte_pointer_array_add(jdata->map->nodes, pptr->node);
+                PMIX_RETAIN(pptr->node);
+                pmix_pointer_array_add(jdata->map->nodes, pptr->node);
                 jdata->map->num_nodes++;
                 PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
             }
             /* add this proc to that node */
-            PRTE_RETAIN(pptr);
-            prte_pointer_array_add(pptr->node->procs, pptr);
+            PMIX_RETAIN(pptr);
+            pmix_pointer_array_add(pptr->node->procs, pptr);
             pptr->node->num_procs++;
             /* and connect it back to its job object, if not already done */
             if (NULL == pptr->job) {
-                PRTE_RETAIN(jdata);
+                PMIX_RETAIN(jdata);
                 pptr->job = jdata;
             }
         }
@@ -743,9 +719,9 @@ next:
                 /* keep tabs of the number of local procs */
                 jdata->num_local_procs++;
                 /* add this proc to our child list */
-                PRTE_RETAIN(pptr);
+                PMIX_RETAIN(pptr);
                 PRTE_FLAG_SET(pptr, PRTE_PROC_FLAG_LOCAL);
-                prte_pointer_array_add(prte_local_children, pptr);
+                pmix_pointer_array_add(prte_local_children, pptr);
             }
 
             /* if the job is in restart mode, the child must not barrier when launched */
@@ -754,26 +730,16 @@ next:
                                    PMIX_BOOL);
             }
             /* mark that this app_context is being used on this node */
-            app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, pptr->app_idx);
+            app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, pptr->app_idx);
             PRTE_FLAG_SET(app, PRTE_APP_FLAG_USED_ON_NODE);
         }
     }
 
-    if (prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* reset the mapped flags */
-        for (n = 0; n < jdata->map->nodes->size; n++) {
-            if (NULL
-                != (node = (prte_node_t *) prte_pointer_array_get_item(jdata->map->nodes, n))) {
-                PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
-            }
-        }
-    }
-
-    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* compute and save bindings of local children */
-        if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_bindings(jdata))) {
-            PRTE_ERROR_LOG(rc);
-            goto REPORT_ERROR;
+    /* reset the mapped flags */
+    for (n = 0; n < jdata->map->nodes->size; n++) {
+        if (NULL
+            != (node = (prte_node_t *) pmix_pointer_array_get_item(jdata->map->nodes, n))) {
+            PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
         }
     }
 
@@ -838,6 +804,7 @@ static int setup_path(prte_app_context_t *app, char **wdir)
     int rc = PRTE_SUCCESS;
     char dir[MAXPATHLEN];
     char *session_dir;
+    bool usercwd = false;
 
     if (prte_get_attribute(&app->attributes, PRTE_APP_SSNDIR_CWD, NULL, PMIX_BOOL)) {
         /* move us to that location */
@@ -858,13 +825,17 @@ static int setup_path(prte_app_context_t *app, char **wdir)
             return PRTE_ERR_OUT_OF_RESOURCE;
         }
         *wdir = strdup(dir);
-        prte_setenv("PWD", dir, true, &app->env);
+        pmix_setenv("PWD", dir, true, &app->env);
     } else {
         /* Try to change to the app's cwd and check that the app
            exists and is executable The function will
            take care of outputting a pretty error message, if required
         */
-        if (PRTE_SUCCESS != (rc = prte_util_check_context_cwd(app, true))) {
+        if (prte_get_attribute(&app->attributes, PRTE_APP_USER_CWD, NULL, PMIX_BOOL)) {
+            usercwd = true;
+        }
+        rc = pmix_util_check_context_cwd(&app->cwd, true, usercwd);
+        if (PMIX_SUCCESS != rc) {
             /* do not ERROR_LOG - it will be reported elsewhere */
             goto CLEANUP;
         }
@@ -886,7 +857,7 @@ static int setup_path(prte_app_context_t *app, char **wdir)
             return PRTE_ERR_OUT_OF_RESOURCE;
         }
         *wdir = strdup(dir);
-        prte_setenv("PWD", dir, true, &app->env);
+        pmix_setenv("PWD", dir, true, &app->env);
     }
 
 CLEANUP:
@@ -900,8 +871,9 @@ static void timer_cb(int fd, short event, void *cbdata)
 {
     prte_timer_t *tm = (prte_timer_t *) cbdata;
     prte_odls_launch_local_t *ll = (prte_odls_launch_local_t *) tm->payload;
+    PRTE_HIDE_UNUSED_PARAMS(fd, event);
 
-    PRTE_ACQUIRE_OBJECT(tm);
+    PMIX_ACQUIRE_OBJECT(tm);
 
     /* increment the number of retries */
     ll->retries++;
@@ -910,7 +882,7 @@ static void timer_cb(int fd, short event, void *cbdata)
     prte_event_active(ll->ev, PRTE_EV_WRITE, 1);
 
     /* release the timer event */
-    PRTE_RELEASE(tm);
+    PMIX_RELEASE(tm);
 }
 
 static int compute_num_procs_alive(pmix_nspace_t job)
@@ -920,7 +892,7 @@ static int compute_num_procs_alive(pmix_nspace_t job)
     int num_procs_alive = 0;
 
     for (i = 0; i < prte_local_children->size; i++) {
-        if (NULL == (child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, i))) {
+        if (NULL == (child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, i))) {
             continue;
         }
         if (!PRTE_FLAG_TEST(child, PRTE_PROC_FLAG_ALIVE)) {
@@ -949,11 +921,14 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
     pmix_proc_t pproc;
     pmix_status_t ret;
     char *ptr;
+    pmix_value_t pidval = PMIX_VALUE_STATIC_INIT;
 
-    PRTE_ACQUIRE_OBJECT(cd);
+    PRTE_HIDE_UNUSED_PARAMS(fd, sd);
+
+    PMIX_ACQUIRE_OBJECT(cd);
 
     /* thread-protect common values */
-    cd->env = prte_argv_copy(prte_launch_environ);
+    cd->env = pmix_argv_copy(prte_launch_environ);
     if (NULL != app->env) {
         for (i = 0; NULL != app->env[i]; i++) {
             /* find the '=' sign.
@@ -962,9 +937,16 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
              */
             char *tmp = strdup(app->env[i]);
             ptr = strchr(tmp, '=');
+            if (NULL == ptr) {
+                PRTE_ERROR_LOG(PRTE_ERR_BAD_PARAM);
+                rc = PRTE_ERR_BAD_PARAM;
+                state = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
+                free(tmp);
+                goto errorout;
+            }
             *ptr = '\0';
             ++ptr;
-            prte_setenv(tmp, ptr, true, &cd->env);
+            pmix_setenv(tmp, ptr, true, &cd->env);
             free(tmp);
         }
     }
@@ -998,35 +980,26 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
         child->rml_uri = NULL;
     }
 
-    /* setup the rest of the environment with the proc-specific items - these
-     * will be overwritten for each child
-     */
-    if (PRTE_SUCCESS != (rc = prte_schizo.setup_child(jobdat, child, app, &cd->env))) {
-        PRTE_ERROR_LOG(rc);
-        state = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
-        goto errorout;
-    }
-
     /* did the user request we display output in xterms? */
     if (NULL != prte_xterm) {
-        prte_list_item_t *nmitem;
+        pmix_list_item_t *nmitem;
         prte_namelist_t *nm;
         /* see if this rank is one of those requested */
         found = false;
-        for (nmitem = prte_list_get_first(&prte_odls_globals.xterm_ranks);
-             nmitem != prte_list_get_end(&prte_odls_globals.xterm_ranks);
-             nmitem = prte_list_get_next(nmitem)) {
+        for (nmitem = pmix_list_get_first(&prte_odls_globals.xterm_ranks);
+             nmitem != pmix_list_get_end(&prte_odls_globals.xterm_ranks);
+             nmitem = pmix_list_get_next(nmitem)) {
             nm = (prte_namelist_t *) nmitem;
             if (PMIX_RANK_WILDCARD == nm->name.rank || child->name.rank == nm->name.rank) {
                 /* we want this one - modify the app's command to include
                  * the prte xterm cmd that starts with the xtermcmd */
-                cd->argv = prte_argv_copy(prte_odls_globals.xtermcmd);
+                cd->argv = pmix_argv_copy(prte_odls_globals.xtermcmd);
                 /* insert the rank into the correct place as a window title */
                 free(cd->argv[2]);
-                prte_asprintf(&cd->argv[2], "Rank %s", PRTE_VPID_PRINT(child->name.rank));
+                pmix_asprintf(&cd->argv[2], "Rank %s", PRTE_VPID_PRINT(child->name.rank));
                 /* add in the argv from the app */
                 for (i = 0; NULL != app->argv[i]; i++) {
-                    prte_argv_append_nosize(&cd->argv, app->argv[i]);
+                    pmix_argv_append_nosize(&cd->argv, app->argv[i]);
                 }
                 /* use the xterm cmd as the app string */
                 cd->cmd = strdup(prte_odls_globals.xtermcmd[0]);
@@ -1034,7 +1007,7 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
                 break;
             } else if (jobdat->num_procs <= nm->name.rank) { /* check for bozo case */
                 /* can't be done! */
-                prte_show_help("help-prte-odls-base.txt", "prte-odls-base:xterm-rank-out-of-bounds",
+                pmix_show_help("help-prte-odls-base.txt", "prte-odls-base:xterm-rank-out-of-bounds",
                                true, prte_process_info.nodename, nm->name.rank, jobdat->num_procs);
                 state = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
                 goto errorout;
@@ -1042,31 +1015,47 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
         }
         if (!found) {
             cd->cmd = strdup(app->app);
-            cd->argv = prte_argv_copy(app->argv);
+            cd->argv = pmix_argv_copy(app->argv);
         }
-    } else if (NULL != prte_fork_agent) {
+    } else if (prte_get_attribute(&jobdat->attributes, PRTE_JOB_EXEC_AGENT, (void**)&ptr, PMIX_STRING)) {
         /* we were given a fork agent - use it */
-        cd->argv = prte_argv_copy(prte_fork_agent);
+        cd->argv = pmix_argv_split(ptr, ' ');
         /* add in the argv from the app */
         for (i = 0; NULL != app->argv[i]; i++) {
-            prte_argv_append_nosize(&cd->argv, app->argv[i]);
+            pmix_argv_append_nosize(&cd->argv, app->argv[i]);
         }
-        cd->cmd = prte_path_findv(prte_fork_agent[0], X_OK, prte_launch_environ, NULL);
+        cd->cmd = pmix_path_findv(cd->argv[0], X_OK, prte_launch_environ, NULL);
         if (NULL == cd->cmd) {
-            prte_show_help("help-prte-odls-base.txt", "prte-odls-base:fork-agent-not-found", true,
-                           prte_process_info.nodename, prte_fork_agent[0]);
+            pmix_show_help("help-prte-odls-base.txt", "prte-odls-base:fork-agent-not-found", true,
+                           prte_process_info.nodename, ptr);
+            state = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
+            free(ptr);
+            goto errorout;
+        }
+        free(ptr);
+    } else if (NULL != prte_fork_agent_string) {
+        /* we were given a fork agent - use it */
+        cd->argv = pmix_argv_split(prte_fork_agent_string, ' ');
+        /* add in the argv from the app */
+        for (i = 0; NULL != app->argv[i]; i++) {
+            pmix_argv_append_nosize(&cd->argv, app->argv[i]);
+        }
+        cd->cmd = pmix_path_findv(cd->argv[0], X_OK, prte_launch_environ, NULL);
+        if (NULL == cd->cmd) {
+            pmix_show_help("help-prte-odls-base.txt", "prte-odls-base:fork-agent-not-found", true,
+                           prte_process_info.nodename, cd->argv[0]);
             state = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
             goto errorout;
         }
     } else {
         cd->cmd = strdup(app->app);
-        cd->argv = prte_argv_copy(app->argv);
+        cd->argv = pmix_argv_copy(app->argv);
     }
 
     /* if we are indexing the argv by rank, do so now */
     if (cd->index_argv) {
         char *param;
-        prte_asprintf(&param, "%s-%u", cd->argv[0], child->name.rank);
+        pmix_asprintf(&param, "%s-%u", cd->argv[0], child->name.rank);
         free(cd->argv[0]);
         cd->argv[0] = param;
     }
@@ -1088,16 +1077,25 @@ void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata)
         state = PRTE_PROC_STATE_FAILED_TO_START;
         goto errorout;
     }
-
+    if (PRTE_PROC_IS_MASTER) {
+        /* locally store the pid */
+        pidval.type = PMIX_PID;
+        pidval.data.pid = child->pid;
+        /* store the PID for later retrieval */
+        rc = PMIx_Store_internal(&child->name, PMIX_PROC_PID, &pidval);
+        if (PMIX_SUCCESS != rc) {
+            PMIX_ERROR_LOG(rc);
+        }
+    }
     PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_RUNNING);
-    PRTE_RELEASE(cd);
+    PMIX_RELEASE(cd);
     return;
 
 errorout:
     PRTE_FLAG_UNSET(child, PRTE_PROC_FLAG_ALIVE);
     child->exit_code = rc;
     PRTE_ACTIVATE_PROC_STATE(&child->name, state);
-    PRTE_RELEASE(cd);
+    PMIX_RELEASE(cd);
 }
 
 void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
@@ -1119,10 +1117,14 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
     char **argvptr;
     char *pathenv = NULL, *mpiexec_pathenv = NULL;
     char *full_search;
+    prte_schizo_base_module_t *schizo;
 
-    PRTE_ACQUIRE_OBJECT(caddy);
+    PRTE_HIDE_UNUSED_PARAMS(fd, sd);
 
-    prte_output_verbose(5, prte_odls_base_framework.framework_output, "%s local:launch",
+    PMIX_ACQUIRE_OBJECT(caddy);
+
+    prte_output_verbose(5, prte_odls_base_framework.framework_output,
+                        "%s local:launch",
                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME));
 
     PMIX_LOAD_NSPACE(job, caddy->job);
@@ -1142,12 +1144,14 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
          * and was removed. This isn't an error so just move along */
         goto ERROR_OUT;
     }
+    schizo = (prte_schizo_base_module_t*)jobdat->schizo;
 
     /* do we have any local procs to launch? */
     if (0 == jobdat->num_local_procs) {
         /* indicate that we are done trying to launch them */
         prte_output_verbose(5, prte_odls_base_framework.framework_output,
-                            "%s local:launch no local procs", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME));
+                            "%s local:launch no local procs",
+                            PRTE_NAME_PRINT(PRTE_PROC_MY_NAME));
         goto GETOUT;
     }
 
@@ -1170,6 +1174,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
         if (prte_sys_limits.num_procs < total_num_local_procs) {
             if (2 < caddy->retries) {
                 /* if we have already tried too many times, then just give up */
+                PRTE_ODLS_SET_ERROR(job, PMIX_ERR_SYS_LIMITS_CHILDREN, -1);
                 PRTE_ACTIVATE_JOB_STATE(jobdat, PRTE_JOB_STATE_FAILED_TO_LAUNCH);
                 goto ERROR_OUT;
             }
@@ -1196,17 +1201,8 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
         if (prte_sys_limits.num_files < limit) {
             if (2 < caddy->retries) {
                 /* tried enough - give up */
-                for (idx = 0; idx < prte_local_children->size; idx++) {
-                    if (NULL
-                        == (child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children,
-                                                                                idx))) {
-                        continue;
-                    }
-                    if (PMIX_CHECK_NSPACE(job, child->name.nspace)) {
-                        child->exit_code = PRTE_PROC_STATE_FAILED_TO_LAUNCH;
-                        PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
-                    }
-                }
+                PRTE_ODLS_SET_ERROR(job, PMIX_ERR_SYS_LIMITS_FILES, -1);
+                PRTE_ACTIVATE_JOB_STATE(jobdat, PRTE_JOB_STATE_FAILED_TO_LAUNCH);
                 goto ERROR_OUT;
             }
             /* don't have enough - wait a little time */
@@ -1216,7 +1212,8 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
     }
 
     for (j = 0; j < jobdat->apps->size; j++) {
-        if (NULL == (app = (prte_app_context_t *) prte_pointer_array_get_item(jobdat->apps, j))) {
+        app = (prte_app_context_t *) pmix_pointer_array_get_item(jobdat->apps, j);
+        if (NULL == app) {
             continue;
         }
 
@@ -1242,22 +1239,13 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
              * to flag all the other procs from the app_context as having "not failed"
              * so we can report things out correctly
              */
-            /* cycle through children to find those for this jobid */
-            for (idx = 0; idx < prte_local_children->size; idx++) {
-                child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
-                if (NULL == child) {
-                    continue;
-                }
-                if (PMIX_CHECK_NSPACE(job, child->name.nspace) && j == (int) child->app_idx) {
-                    child->exit_code = rc;
-                    PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
-                }
-            }
+            PRTE_ODLS_SET_ERROR(job, PMIX_ERR_SYS_LIMITS_FILES, j);
+            PRTE_ACTIVATE_JOB_STATE(jobdat, PRTE_JOB_STATE_FAILED_TO_LAUNCH);
             goto GETOUT;
         }
 
         /* setup the environment for this app */
-        if (PRTE_SUCCESS != (rc = prte_schizo.setup_fork(jobdat, app))) {
+        if (PRTE_SUCCESS != (rc = schizo->setup_fork(jobdat, app))) {
 
             PRTE_OUTPUT_VERBOSE((10, prte_odls_base_framework.framework_output,
                                  "%s odls:launch:setup_fork failed with error %s",
@@ -1272,7 +1260,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
              */
             /* cycle through children to find those for this jobid */
             for (idx = 0; idx < prte_local_children->size; idx++) {
-                child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
+                child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, idx);
                 if (NULL == child) {
                     continue;
                 }
@@ -1288,7 +1276,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
         if (PRTE_SUCCESS != (rc = prte_filem.link_local_files(jobdat, app))) {
             /* cycle through children to find those for this jobid */
             for (idx = 0; idx < prte_local_children->size; idx++) {
-                child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
+                child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, idx);
                 if (NULL == child) {
                     continue;
                 }
@@ -1300,43 +1288,12 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
             goto GETOUT;
         }
 
-        /* Search for the OMPI_exec_path and PATH settings in the environment. */
-        for (argvptr = app->env; *argvptr != NULL; argvptr++) {
-            if (0 == strncmp("OMPI_exec_path=", *argvptr, 15)) {
-                mpiexec_pathenv = *argvptr + 15;
-            }
-            if (0 == strncmp("PATH=", *argvptr, 5)) {
-                pathenv = *argvptr + 5;
-            }
-        }
-
-        /* If OMPI_exec_path is set (meaning --path was used), then create a
-           temporary environment to be used in the search for the executable.
-           The PATH setting in this temporary environment is a combination of
-           the OMPI_exec_path and PATH values.  If OMPI_exec_path is not set,
-           then just use existing environment with PATH in it.  */
-        if (NULL != mpiexec_pathenv) {
-            argvptr = NULL;
-            if (pathenv != NULL) {
-                prte_asprintf(&full_search, "%s:%s", mpiexec_pathenv, pathenv);
-            } else {
-                prte_asprintf(&full_search, "%s", mpiexec_pathenv);
-            }
-            prte_setenv("PATH", full_search, true, &argvptr);
-            free(full_search);
-        } else {
-            argvptr = app->env;
-        }
-
-        rc = prte_util_check_context_app(app, argvptr);
+        rc = pmix_util_check_context_app(&app->app, app->cwd, app->env);
         /* do not ERROR_LOG - it will be reported elsewhere */
-        if (NULL != mpiexec_pathenv) {
-            prte_argv_free(argvptr);
-        }
-        if (PRTE_SUCCESS != rc) {
+        if (PMIX_SUCCESS != rc) {
             /* cycle through children to find those for this jobid */
             for (idx = 0; idx < prte_local_children->size; idx++) {
-                child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
+                child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, idx);
                 if (NULL == child) {
                     continue;
                 }
@@ -1350,11 +1307,11 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
 
         /* if the user requested it, set the system resource limits */
         if (PRTE_SUCCESS != (rc = prte_util_init_sys_limits(&msg))) {
-            prte_show_help("help-prte-odls-default.txt", "set limit", true,
+            pmix_show_help("help-prte-odls-default.txt", "set limit", true,
                            prte_process_info.nodename, app, __FILE__, __LINE__, msg);
             /* cycle through children to find those for this jobid */
             for (idx = 0; idx < prte_local_children->size; idx++) {
-                child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
+                child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, idx);
                 if (NULL == child) {
                     continue;
                 }
@@ -1381,7 +1338,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
         /* okay, now let's launch all the local procs for this app using the provided fork_local fn
          */
         for (idx = 0; idx < prte_local_children->size; idx++) {
-            child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, idx);
+            child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, idx);
             if (NULL == child) {
                 continue;
             }
@@ -1442,7 +1399,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
             prte_wait_cb(child, prte_odls_base_default_wait_local_proc, evb, NULL);
 
             /* dispatch this child to the next available launch thread */
-            cd = PRTE_NEW(prte_odls_spawn_caddy_t);
+            cd = PMIX_NEW(prte_odls_spawn_caddy_t);
             cd->jdata = jobdat;
             cd->app = app;
             cd->wdir = strdup(app->cwd);
@@ -1462,7 +1419,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
             if (PRTE_SUCCESS != (rc = prte_iof_base_setup_prefork(&cd->opts))) {
                 PRTE_ERROR_LOG(rc);
                 child->exit_code = rc;
-                PRTE_RELEASE(cd);
+                PMIX_RELEASE(cd);
                 PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
                 goto GETOUT;
             }
@@ -1471,7 +1428,7 @@ void prte_odls_base_default_launch_local(int fd, short sd, void *cbdata)
                 rc = prte_iof_base_setup_parent(&child->name, &cd->opts);
                 if (PRTE_SUCCESS != rc) {
                     PRTE_ERROR_LOG(rc);
-                    PRTE_RELEASE(cd);
+                    PMIX_RELEASE(cd);
                     PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
                     goto GETOUT;
                 }
@@ -1494,7 +1451,7 @@ ERROR_OUT:
         PRTE_ERROR_LOG(PRTE_ERROR);
     }
     /* release the event */
-    PRTE_RELEASE(caddy);
+    PMIX_RELEASE(caddy);
 }
 
 /**
@@ -1507,7 +1464,8 @@ int prte_odls_base_default_signal_local_procs(const pmix_proc_t *proc, int32_t s
     int rc, i;
     prte_proc_t *child;
 
-    PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output, "%s odls: signaling proc %s",
+    PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
+                         "%s odls: signaling proc %s",
                          PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                          (NULL == proc) ? "NULL" : PRTE_NAME_PRINT(proc)));
 
@@ -1517,7 +1475,7 @@ int prte_odls_base_default_signal_local_procs(const pmix_proc_t *proc, int32_t s
     if (NULL == proc) {
         rc = PRTE_SUCCESS; /* pre-set this as an empty list causes us to drop to bottom */
         for (i = 0; i < prte_local_children->size; i++) {
-            child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, i);
+            child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, i);
             if (NULL == child) {
                 continue;
             }
@@ -1534,7 +1492,7 @@ int prte_odls_base_default_signal_local_procs(const pmix_proc_t *proc, int32_t s
 
     /* we want it sent to some specified process, so find it */
     for (i = 0; i < prte_local_children->size; i++) {
-        child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, i);
+        child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, i);
         if (NULL == child) {
             continue;
         }
@@ -1565,6 +1523,9 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
     prte_job_t *jobdat;
     prte_proc_state_t state = PRTE_PROC_STATE_WAITPID_FIRED;
     prte_proc_t *cptr;
+    bool flag = false;
+    bool *fptr = &flag;
+    PRTE_HIDE_UNUSED_PARAMS(fd, sd);
 
     prte_output_verbose(5, prte_odls_base_framework.framework_output,
                         "%s odls:wait_local_proc child process %s pid %ld terminated",
@@ -1605,8 +1566,6 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
                              "%s odls:waitpid_fired child %s died by call to abort",
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&proc->name)));
         state = PRTE_PROC_STATE_CALLED_ABORT;
-        /* regardless of our eventual code path, we need to
-         * flag that this proc has had its waitpid fired */
         PRTE_FLAG_SET(proc, PRTE_PROC_FLAG_WAITPID);
         goto MOVEON;
     }
@@ -1624,8 +1583,6 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
         PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
                              "%s odls:waitpid_fired child %s was ordered to die",
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&proc->name)));
-        /* regardless of our eventual code path, we need to
-         * flag that this proc has had its waitpid fired */
         PRTE_FLAG_SET(proc, PRTE_PROC_FLAG_WAITPID);
         goto MOVEON;
     }
@@ -1655,7 +1612,9 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
                  * felt it was non-normal - in this latter case, we do not
                  * require that the proc deregister before terminating
                  */
-                if (0 != proc->exit_code && prte_abort_non_zero_exit) {
+                flag = false;
+                prte_get_attribute(&jobdat->attributes, PRTE_JOB_TERM_NONZERO_EXIT, (void**)&fptr, PMIX_BOOL);
+                if (0 != proc->exit_code && flag) {
                     state = PRTE_PROC_STATE_TERM_NON_ZERO;
                     PRTE_OUTPUT_VERBOSE(
                         (5, prte_odls_base_framework.framework_output,
@@ -1682,7 +1641,7 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
         } else {
             /* has any child in this job already registered? */
             for (i = 0; i < prte_local_children->size; i++) {
-                cptr = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, i);
+                cptr = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, i);
                 if (NULL == cptr) {
                     continue;
                 }
@@ -1718,7 +1677,9 @@ void prte_odls_base_default_wait_local_proc(int fd, short sd, void *cbdata)
              * none of them will. This is considered acceptable. Still
              * flag it as abnormal if the exit code was non-zero
              */
-            if (0 != proc->exit_code && prte_abort_non_zero_exit) {
+            flag = false;
+            prte_get_attribute(&jobdat->attributes, PRTE_JOB_TERM_NONZERO_EXIT, (void**)&fptr, PMIX_BOOL);
+            if (0 != proc->exit_code && flag) {
                 state = PRTE_PROC_STATE_TERM_NON_ZERO;
             } else {
                 state = PRTE_PROC_STATE_WAITPID_FIRED;
@@ -1782,11 +1743,11 @@ MOVEON:
     prte_wait_cb_cancel(proc);
     PRTE_ACTIVATE_PROC_STATE(&proc->name, state);
     /* cleanup the tracker */
-    PRTE_RELEASE(t2);
+    PMIX_RELEASE(t2);
 }
 
 typedef struct {
-    prte_list_item_t super;
+    pmix_list_item_t super;
     prte_proc_t *child;
 } prte_odls_quick_caddy_t;
 static void qcdcon(prte_odls_quick_caddy_t *p)
@@ -1796,34 +1757,35 @@ static void qcdcon(prte_odls_quick_caddy_t *p)
 static void qcddes(prte_odls_quick_caddy_t *p)
 {
     if (NULL != p->child) {
-        PRTE_RELEASE(p->child);
+        PMIX_RELEASE(p->child);
     }
 }
-PRTE_CLASS_INSTANCE(prte_odls_quick_caddy_t, prte_list_item_t, qcdcon, qcddes);
+PMIX_CLASS_INSTANCE(prte_odls_quick_caddy_t, pmix_list_item_t, qcdcon, qcddes);
 
-int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
+int prte_odls_base_default_kill_local_procs(pmix_pointer_array_t *procs,
                                             prte_odls_base_kill_local_fn_t kill_local)
 {
     prte_proc_t *child;
-    prte_list_t procs_killed;
+    pmix_list_t procs_killed;
     prte_proc_t *proc, proctmp;
     int i, j, ret;
-    prte_pointer_array_t procarray, *procptr;
+    pmix_pointer_array_t procarray, *procptr;
     bool do_cleanup;
     prte_odls_quick_caddy_t *cd;
+    struct timespec tp = {0, 250000000};
 
-    PRTE_CONSTRUCT(&procs_killed, prte_list_t);
+    PMIX_CONSTRUCT(&procs_killed, pmix_list_t);
 
     /* if the pointer array is NULL, then just kill everything */
     if (NULL == procs) {
         PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
                              "%s odls:kill_local_proc working on WILDCARD",
                              PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
-        PRTE_CONSTRUCT(&procarray, prte_pointer_array_t);
-        prte_pointer_array_init(&procarray, 1, 1, 1);
-        PRTE_CONSTRUCT(&proctmp, prte_proc_t);
+        PMIX_CONSTRUCT(&procarray, pmix_pointer_array_t);
+        pmix_pointer_array_init(&procarray, 1, 1, 1);
+        PMIX_CONSTRUCT(&proctmp, prte_proc_t);
         PMIX_LOAD_PROCID(&proctmp.name, NULL, PMIX_RANK_WILDCARD);
-        prte_pointer_array_add(&procarray, &proctmp);
+        pmix_pointer_array_add(&procarray, &proctmp);
         procptr = &procarray;
         do_cleanup = true;
     } else {
@@ -1836,11 +1798,11 @@ int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
 
     /* cycle through the provided array of processes to kill */
     for (i = 0; i < procptr->size; i++) {
-        if (NULL == (proc = (prte_proc_t *) prte_pointer_array_get_item(procptr, i))) {
+        if (NULL == (proc = (prte_proc_t *) pmix_pointer_array_get_item(procptr, i))) {
             continue;
         }
         for (j = 0; j < prte_local_children->size; j++) {
-            child = (prte_proc_t *) prte_pointer_array_get_item(prte_local_children, j);
+            child = (prte_proc_t *) pmix_pointer_array_get_item(prte_local_children, j);
             if (NULL == child) {
                 continue;
             }
@@ -1891,8 +1853,9 @@ int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
                 /* ensure, though, that the state is terminated so we don't lockup if
                  * the proc never started
                  */
-                if (PRTE_PROC_STATE_UNDEF == child->state || PRTE_PROC_STATE_INIT == child->state
-                    || PRTE_PROC_STATE_RUNNING == child->state) {
+                if (PRTE_PROC_STATE_UNDEF == child->state ||
+                    PRTE_PROC_STATE_INIT == child->state ||
+                    PRTE_PROC_STATE_RUNNING == child->state) {
                     /* we can't be sure what happened, but make sure we
                      * at least have a value that will let us eventually wakeup
                      */
@@ -1925,12 +1888,13 @@ int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
                running, then SIGTERM will not get delivered.  Ignore return
                value. */
             PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
-                                 "%s SENDING SIGCONT TO %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                                 "%s SENDING SIGCONT TO %s",
+                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                  PRTE_NAME_PRINT(&child->name)));
-            cd = PRTE_NEW(prte_odls_quick_caddy_t);
-            PRTE_RETAIN(child);
+            cd = PMIX_NEW(prte_odls_quick_caddy_t);
+            PMIX_RETAIN(child);
             cd->child = child;
-            prte_list_append(&procs_killed, &cd->super);
+            pmix_list_append(&procs_killed, &cd->super);
             kill_local(child->pid, SIGCONT);
             continue;
 
@@ -1949,39 +1913,37 @@ int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
 
     /* if we are issuing signals, then we need to wait a little
      * and send the next in sequence */
-    if (0 < prte_list_get_size(&procs_killed)) {
-        /* Wait a little. Do so in a loop since sleep() can be interrupted by a
+    if (0 < pmix_list_get_size(&procs_killed)) {
+        /* Wait a little. Do so in nanosleep() - can be interrupted by a
          * signal. Most likely SIGCHLD in this case */
-        ret = prte_odls_globals.timeout_before_sigkill;
-        while (ret > 0) {
-            PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
-                                 "%s Sleep %d sec (total = %d)", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
-                                 ret, prte_odls_globals.timeout_before_sigkill));
-            ret = sleep(ret);
-        }
+        PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
+                             "%s Sleep %d nsec",
+                             PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                             tp.tv_nsec));
+        ret = nanosleep(&tp, NULL);
         /* issue a SIGTERM to all */
-        PRTE_LIST_FOREACH(cd, &procs_killed, prte_odls_quick_caddy_t)
+        PMIX_LIST_FOREACH(cd, &procs_killed, prte_odls_quick_caddy_t)
         {
             PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
-                                 "%s SENDING SIGTERM TO %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                                 "%s SENDING SIGTERM TO %s",
+                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                  PRTE_NAME_PRINT(&cd->child->name)));
             kill_local(cd->child->pid, SIGTERM);
         }
-        /* Wait a little. Do so in a loop since sleep() can be interrupted by a
+        PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
+                             "%s Sleep %d nsec",
+                             PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                             tp.tv_nsec));
+        /* Wait a little. Do so in nanosleep() - can be interrupted by a
          * signal. Most likely SIGCHLD in this case */
-        ret = prte_odls_globals.timeout_before_sigkill;
-        while (ret > 0) {
-            PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
-                                 "%s Sleep %d sec (total = %d)", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
-                                 ret, prte_odls_globals.timeout_before_sigkill));
-            ret = sleep(ret);
-        }
+        ret = nanosleep(&tp, NULL);
 
         /* issue a SIGKILL to all */
-        PRTE_LIST_FOREACH(cd, &procs_killed, prte_odls_quick_caddy_t)
+        PMIX_LIST_FOREACH(cd, &procs_killed, prte_odls_quick_caddy_t)
         {
             PRTE_OUTPUT_VERBOSE((5, prte_odls_base_framework.framework_output,
-                                 "%s SENDING SIGKILL TO %s", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
+                                 "%s SENDING SIGKILL TO %s",
+                                 PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                  PRTE_NAME_PRINT(&cd->child->name)));
             kill_local(cd->child->pid, SIGKILL);
             /* indicate the waitpid fired as this is effectively what
@@ -2010,12 +1972,12 @@ int prte_odls_base_default_kill_local_procs(prte_pointer_array_t *procs,
             }
         }
     }
-    PRTE_LIST_DESTRUCT(&procs_killed);
+    PMIX_LIST_DESTRUCT(&procs_killed);
 
     /* cleanup arrays, if required */
     if (do_cleanup) {
-        PRTE_DESTRUCT(&procarray);
-        PRTE_DESTRUCT(&proctmp);
+        PMIX_DESTRUCT(&procarray);
+        PMIX_DESTRUCT(&proctmp);
     }
 
     return PRTE_SUCCESS;
@@ -2063,13 +2025,7 @@ int prte_odls_base_default_restart_proc(prte_proc_t *child,
         free(child->rml_uri);
         child->rml_uri = NULL;
     }
-    app = (prte_app_context_t *) prte_pointer_array_get_item(jobdat->apps, child->app_idx);
-
-    /* reset envars to match this child */
-    if (PRTE_SUCCESS != (rc = prte_schizo.setup_child(jobdat, child, app, &app->env))) {
-        PRTE_ERROR_LOG(rc);
-        goto CLEANUP;
-    }
+    app = (prte_app_context_t *) pmix_pointer_array_get_item(jobdat->apps, child->app_idx);
 
     /* setup the path */
     if (PRTE_SUCCESS != (rc = setup_path(app, &wdir))) {
@@ -2083,7 +2039,7 @@ int prte_odls_base_default_restart_proc(prte_proc_t *child,
     /* NEED TO UPDATE THE REINCARNATION NUMBER IN PMIX */
 
     /* dispatch this child to the next available launch thread */
-    cd = PRTE_NEW(prte_odls_spawn_caddy_t);
+    cd = PMIX_NEW(prte_odls_spawn_caddy_t);
     if (NULL != wdir) {
         cd->wdir = strdup(wdir);
         free(wdir);
@@ -2104,7 +2060,7 @@ int prte_odls_base_default_restart_proc(prte_proc_t *child,
     if (PRTE_SUCCESS != (rc = prte_iof_base_setup_prefork(&cd->opts))) {
         PRTE_ERROR_LOG(rc);
         child->exit_code = rc;
-        PRTE_RELEASE(cd);
+        PMIX_RELEASE(cd);
         PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
         goto CLEANUP;
     }
@@ -2113,7 +2069,7 @@ int prte_odls_base_default_restart_proc(prte_proc_t *child,
         rc = prte_iof_base_setup_parent(&child->name, &cd->opts);
         if (PRTE_SUCCESS != rc) {
             PRTE_ERROR_LOG(rc);
-            PRTE_RELEASE(cd);
+            PMIX_RELEASE(cd);
             PRTE_ACTIVATE_PROC_STATE(&child->name, PRTE_PROC_STATE_FAILED_TO_LAUNCH);
             goto CLEANUP;
         }

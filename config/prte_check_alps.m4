@@ -181,15 +181,13 @@ AC_DEFUN([PRTE_CHECK_ALPS],[
                CRAY_ALPSUTIL_LIBS = $CRAY_ALPSUTIL_STATIC_LIBS],
               [])
 
-	PRTE_SUMMARY_ADD([[Resource Managers]],[[Cray Alps]],[$1],[$prte_check_cray_alps_happy])
+	PRTE_SUMMARY_ADD([Resource Managers], [Cray Alps], [], [$prte_check_cray_alps_happy])
     fi
 
     AS_IF([test "$prte_check_cray_alps_happy" = "yes"],
           [$1_LDFLAGS="[$]$1_LDFLAGS $CRAY_ALPSLLI_LIBS $CRAY_ALPSUTIL_LIBS"
            $1_CPPFLAGS="[$]$1_CPPFLAGS $CRAY_ALPSLLI_CFLAGS $CRAY_ALPSUTIL_CFLAGS $CRAY_ALPS_CFLAGS $CRAY_WLM_DETECT_CFLAGS"
            $1_LIBS="[$]$1_LIBS $CRAY_ALPSLLI_LIBS $CRAY_ALPSUTIL_LIBS $CRAY_WLM_DETECT_LIBS $CRAY_UGNI_LIBS"
-           $1_WRAPPER_EXTRA_LDFLAGS="$CRAY_ALPSLLI_LIBS $CRAY_ALPSUTIL_LIBS $CRAY_WLM_DETECT_LIBS $CRAY_UGNI_LIBS"
-           $1_WRAPPER_EXTRA_LIBS="$CRAY_ALPSLLI_LIBS $CRAY_ALPSUTIL_LIBS $CRAY_WLM_DETECT_LIBS $CRAY_UGNI_LIBS"
 	   $2],
 	  [$3])
 ])

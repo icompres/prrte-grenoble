@@ -115,7 +115,7 @@ AC_DEFUN([PRTE_PROG_CC_C11],[
             for flag in $(echo $prte_prog_cc_c11_flags | tr ' ' '\n') ; do
                 PRTE_PROG_CC_C11_HELPER([$flag],[prte_cv_c11_flag=$flag],[])
                 if test "x$prte_cv_c11_flag" != "x" ; then
-                    CFLAGS="$CFLAGS $prte_cv_c11_flag"
+                    PRTE_APPEND_UNIQ([CFLAGS], ["$prte_cv_c11_flag"])
                     AC_MSG_NOTICE([using $flag to enable C11 support])
                     prte_cv_c11_supported=yes
                     break
@@ -167,11 +167,6 @@ AC_DEFUN([PRTE_SETUP_CC],[
     AC_REQUIRE([AM_PROG_CC_C_O])
 
     PRTE_VAR_SCOPE_PUSH([prte_prog_cc_c11_helper__Thread_local_available prte_prog_cc_c11_helper_atomic_var_available prte_prog_cc_c11_helper__Atomic_available prte_prog_cc_c11_helper__static_assert_available prte_prog_cc_c11_helper__Generic_available prte_prog_cc__thread_available prte_prog_cc_c11_helper_atomic_fetch_xor_explicit_available prte_prog_cc_c11_atomic_function])
-
-    # AC_PROG_CC_C99 changes CC (instead of CFLAGS) so save CC (without c99
-    # flags) for use in our wrappers.
-    WRAPPER_CC="$CC"
-    AC_SUBST([WRAPPER_CC])
 
     PRTE_PROG_CC_C11
     PRTE_CHECK_CC_IQUOTE
@@ -249,7 +244,7 @@ AC_DEFUN([PRTE_SETUP_CC],[
         # compiling and linking to circumvent trouble with
         # libgcov.
         LDFLAGS_orig="$LDFLAGS"
-        LDFLAGS="$LDFLAGS_orig --coverage"
+        PRTE_APPEND_UNIQ([LDFLAGS], ["--coverage"])
         PRTE_COVERAGE_FLAGS=
 
         _PRTE_CHECK_SPECIFIC_CFLAGS(--coverage, coverage)
@@ -268,37 +263,18 @@ AC_DEFUN([PRTE_SETUP_CC],[
             CLEANFILES="*.bb *.bbg ${CLEANFILES}"
             PRTE_COVERAGE_FLAGS="-ftest-coverage -fprofile-arcs"
         fi
-        PRTE_FLAGS_UNIQ(CFLAGS)
-        PRTE_FLAGS_UNIQ(LDFLAGS)
         WANT_DEBUG=1
    fi
 
     # Do we want debugging?
     if test "$WANT_DEBUG" = "1" && test "$enable_debug_symbols" != "no" ; then
-        CFLAGS="$CFLAGS -g"
-
-        PRTE_FLAGS_UNIQ(CFLAGS)
+        PRTE_APPEND_UNIQ([CFLAGS], ["-g"])
         AC_MSG_WARN([-g has been added to CFLAGS (--enable-debug)])
     fi
 
     # These flags are generally gcc-specific; even the
     # gcc-impersonating compilers won't accept them.
     PRTE_CFLAGS_BEFORE_PICKY="$CFLAGS"
-
-    if test $WANT_PICKY_COMPILER -eq 1; then
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wundef, Wundef)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wno-long-long, Wno_long_long, int main() { long long x; })
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wsign-compare, Wsign_compare)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wmissing-prototypes, Wmissing_prototypes)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wstrict-prototypes, Wstrict_prototypes)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wcomment, Wcomment)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wshadow, Wshadow)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Werror-implicit-function-declaration, Werror_implicit_function_declaration)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wno-long-double, Wno_long_double, int main() { long double x; })
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-fno-strict-aliasing, fno_strict_aliasing, int main () { int x; })
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-pedantic, pedantic)
-        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wall, Wall)
-    fi
 
     # Note: Some versions of clang (at least >= 3.5 -- perhaps
     # older versions, too?) and xlc with -g (v16.1, perhaps older)
@@ -325,7 +301,6 @@ AC_DEFUN([PRTE_SETUP_CC],[
         _PRTE_CHECK_SPECIFIC_CFLAGS($RESTRICT_CFLAGS, restrict)
     fi
 
-    PRTE_FLAGS_UNIQ([CFLAGS])
     AC_MSG_RESULT(CFLAGS result: $CFLAGS)
 
     # see if the C compiler supports __builtin_expect
@@ -429,4 +404,28 @@ AC_DEFUN([_PRTE_PROG_CC],[
     PRTE_WHICH([$prte_cc_argv0], [PRTE_CC_ABSOLUTE])
     AC_SUBST(PRTE_CC_ABSOLUTE)
     PRTE_VAR_SCOPE_POP
+])
+
+AC_DEFUN([PRTE_SETUP_PICKY_COMPILERS],[
+    if test $WANT_PICKY_COMPILER -eq 1 && test "$prte_c_vendor" != "pgi"; then
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wundef, Wundef)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wno-long-long, Wno_long_long, int main() { long long x; })
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wsign-compare, Wsign_compare)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wmissing-prototypes, Wmissing_prototypes)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wstrict-prototypes, Wstrict_prototypes)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wcomment, Wcomment)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wshadow, Wshadow)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Werror-implicit-function-declaration, Werror_implicit_function_declaration)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wno-long-double, Wno_long_double, int main() { long double x; })
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-fno-strict-aliasing, fno_strict_aliasing, int main () { int x; })
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-pedantic, pedantic)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wall, Wall)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Wextra, Wextra)
+        _PRTE_CHECK_SPECIFIC_CFLAGS(-Werror, Werror)
+        if test $WANT_MEMORY_SANITIZERS -eq 1 && test "$prte_c_vendor" != "pgi"; then
+            _PRTE_CHECK_SPECIFIC_CFLAGS(-fsanitize=address, fsanaddress)
+            _PRTE_CHECK_SPECIFIC_CFLAGS(-fsanitize=undefined, fsanundefined)
+        fi
+    fi
+
 ])

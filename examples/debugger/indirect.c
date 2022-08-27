@@ -15,7 +15,7 @@
  * Copyright (c) 2011      Oak Ridge National Labs.  All rights reserved.
  * Copyright (c) 2013-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2015      Mellanox Technologies, Inc.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * Copyright (c) 2021      IBM Corporation.  All rights reserved.
  * $COPYRIGHT$
  *
@@ -101,6 +101,13 @@ static void evhandler_reg_callbk(pmix_status_t status, size_t evhandler_ref, voi
     DEBUG_WAKEUP_THREAD(lock);
 }
 
+static void opcbfunc(pmix_status_t status, void *cbdata)
+{
+    mylock_t *lock = (mylock_t *) cbdata;
+    lock->status = status;
+    DEBUG_WAKEUP_THREAD(lock);
+}
+
 static void spawn_cbfunc(size_t evhdlr_registration_id, pmix_status_t status,
                          const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
                          pmix_info_t results[], size_t nresults,
@@ -128,7 +135,7 @@ static void spawn_cbfunc(size_t evhdlr_registration_id, pmix_status_t status,
 int main(int argc, char **argv)
 {
     pmix_status_t rc;
-    pmix_info_t *info;
+    pmix_info_t *info, iofinfo;
     pmix_app_t *app;
     size_t ninfo, napps;
     char *requested_launcher;
@@ -195,7 +202,11 @@ int main(int argc, char **argv)
            (unsigned long) pid);
 
     /* get our URI as we will need it later */
+#ifdef PMIX_MYSERVER_URI
+    rc = PMIx_Get(&myproc, PMIX_MYSERVER_URI, NULL, 0, &val);
+#else
     rc = PMIx_Get(&myproc, PMIX_SERVER_URI, NULL, 0, &val);
+#endif
     if (PMIX_SUCCESS != rc) {
         fprintf(stderr, "Failed to retrieve our URI: %s\n", PMIx_Error_string(rc));
         PMIx_tool_finalize();
@@ -324,7 +335,7 @@ int main(int argc, char **argv)
     PMIX_INFO_LIST_RELEASE(dirs);
     info = darray.array;
     ninfo = darray.size;
-    PMIx_Register_event_handler(&code, 1, info, 2, spawn_cbfunc, evhandler_reg_callbk,
+    PMIx_Register_event_handler(&code, 1, info, ninfo, spawn_cbfunc, evhandler_reg_callbk,
                                 (void *) &mylock);
     DEBUG_WAIT_THREAD(&mylock);
     DEBUG_DESTRUCT_LOCK(&mylock);
@@ -344,7 +355,7 @@ int main(int argc, char **argv)
     PMIX_INFO_LIST_RELEASE(dirs);
     info = darray.array;
     ninfo = darray.size;
-    PMIx_Notify_event(PMIX_DEBUGGER_RELEASE, &myproc, PMIX_RANGE_CUSTOM, info, 2, NULL, NULL);
+    PMIx_Notify_event(PMIX_DEBUGGER_RELEASE, &myproc, PMIX_RANGE_CUSTOM, info, ninfo, NULL, NULL);
     PMIX_DATA_ARRAY_DESTRUCT(&darray);
     printf("WAITING FOR APPLICATION LAUNCH\n");
     /* wait for the IL to have launched its application */
@@ -369,6 +380,26 @@ int main(int argc, char **argv)
         goto done;
     }
     printf("APPLICATION HAS LAUNCHED: %s\n", (char *) appnspace);
+
+    /* we want to forward our stdin to the launcher we
+     * started - it will know what to do with its stdin */
+    PMIX_LOAD_PROCID(&proc, (char*)clientspace, PMIX_RANK_WILDCARD);
+    DEBUG_CONSTRUCT_LOCK(&mylock);
+    PMIX_INFO_LOAD(&iofinfo, PMIX_IOF_PUSH_STDIN, NULL, PMIX_BOOL);
+    rc = PMIx_IOF_push(&proc, 1, NULL, &iofinfo, 1, opcbfunc, &mylock);
+    if (PMIX_SUCCESS != rc && PMIX_OPERATION_SUCCEEDED != rc) {
+        fprintf(stderr, "IOF push of stdin failed: %s\n", PMIx_Error_string(rc));
+        DEBUG_DESTRUCT_LOCK(&mylock);
+        goto done;
+    } else if (PMIX_SUCCESS == rc) {
+        DEBUG_WAIT_THREAD(&mylock);
+        if (PMIX_SUCCESS != mylock.status) {
+            fprintf(stderr, "IOF push of stdin failed: %s\n", PMIx_Error_string(rc));
+            DEBUG_DESTRUCT_LOCK(&mylock);
+            goto done;
+        }
+    }
+    DEBUG_DESTRUCT_LOCK(&mylock);
 
     /* setup the debugger */
     mydata = (myquery_data_t *) malloc(sizeof(myquery_data_t));

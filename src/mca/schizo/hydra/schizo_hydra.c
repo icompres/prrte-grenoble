@@ -18,7 +18,7 @@
  * Copyright (c) 2015      Research Organization for Information Science
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2018-2021 IBM Corporation.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -40,15 +40,15 @@
 #    include <sys/utsname.h>
 #endif
 
-#include "src/util/argv.h"
-#include "src/util/keyval_parse.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_keyval_parse.h"
 #include "src/util/name_fns.h"
-#include "src/util/os_dirpath.h"
-#include "src/util/os_path.h"
-#include "src/util/path.h"
-#include "src/util/prte_environ.h"
+#include "src/util/pmix_os_dirpath.h"
+#include "src/util/pmix_os_path.h"
+#include "src/util/pmix_path.h"
+#include "src/util/pmix_environ.h"
 #include "src/util/session_dir.h"
-#include "src/util/show_help.h"
+#include "src/util/pmix_show_help.h"
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/ess/base/base.h"
@@ -500,7 +500,7 @@ static int check_help(prte_cmd_line_t *cli, char **argv)
     size_t n;
     char *option;
 
-    if (prte_cmd_line_is_taken(cli, "help")) {
+    if (pmix_cmd_line_is_taken(cli, "help")) {
         fprintf(stdout, "\nUsage: %s [global opts] [local opts for exec1] [exec1] [exec1 args] :"
                         "[local opts for exec2] [exec2] [exec2 args] : ...\n%s",
                 prte_tool_basename, genhelp);
@@ -547,14 +547,14 @@ static void check_and_replace(char **argv, int idx,
     if (NULL == tmp) {
         argv[idx] = strdup(replacement);
     } else {
-        prte_asprintf(&argv[idx], "%s%s", replacement, tmp);
+        pmix_asprintf(&argv[idx], "%s%s", replacement, tmp);
         free(tmp);
     }
 }
 
 static int convert_deprecated_cli(char *option, char ***argv, int i)
 {
-    char **pargs, *p2, *modifier;
+    char **pargs, *p2;
     int rc = PRTE_SUCCESS;
 
     pargs = *argv;
@@ -633,7 +633,7 @@ static int convert_deprecated_cli(char *option, char ***argv, int i)
 
     /* --outfile-pattern -> --output file= */
     if (0 == strcmp(option, "--outfile-pattern")) {
-        prte_asprintf(&p2, "file=%s:pattern", pargs[i+1]);
+        pmix_asprintf(&p2, "file=%s:pattern", pargs[i+1]);
         rc = prte_schizo_base_convert(argv, i, 2, "--output", NULL, p2, false);
         return PRTE_ERR_SILENT;
     }
@@ -708,16 +708,16 @@ static int parse_cli(int argc, int start, char **argv, char ***target)
                 && NULL == strcasestr(argv[i + 1], "noinherit")) {
                 if (NULL == target) {
                     /* push it into our environment */
-                    prte_setenv("PRTE_MCA_rmaps_default_inherit", "1", true, &environ);
-                    prte_setenv("PRTE_MCA_rmaps_default_mapping_policy", argv[i + 1], true,
+                    pmix_setenv("PRTE_MCA_rmaps_default_inherit", "1", true, &environ);
+                    pmix_setenv("PRTE_MCA_rmaps_default_mapping_policy", argv[i + 1], true,
                                 &environ);
                 } else {
-                    prte_argv_append_nosize(target, "--prtemca");
-                    prte_argv_append_nosize(target, "rmaps_default_inherit");
-                    prte_argv_append_nosize(target, "1");
-                    prte_argv_append_nosize(target, "--prtemca");
-                    prte_argv_append_nosize(target, "rmaps_default_mapping_policy");
-                    prte_argv_append_nosize(target, argv[i + 1]);
+                    pmix_argv_append_nosize(target, "--prtemca");
+                    pmix_argv_append_nosize(target, "rmaps_default_inherit");
+                    pmix_argv_append_nosize(target, "1");
+                    pmix_argv_append_nosize(target, "--prtemca");
+                    pmix_argv_append_nosize(target, "rmaps_default_mapping_policy");
+                    pmix_argv_append_nosize(target, argv[i + 1]);
                 }
             }
              break;
@@ -743,15 +743,15 @@ static int parse_env(prte_cmd_line_t *cmd_line, char **srcenv, char ***dstenv, b
         return PRTE_ERR_TAKE_NEXT_OPTION;
     }
 
-    if (0 < (j = prte_cmd_line_get_ninsts(cmd_line, "genv"))) {
+    if (0 < (j = pmix_cmd_line_get_ninsts(cmd_line, "genv"))) {
         for (i = 0; i < j; ++i) {
             /* the first value on the list is the name of the param */
-            pval = prte_cmd_line_get_param(cmd_line, "genv", i, 0);
+            pval = pmix_cmd_line_get_param(cmd_line, "genv", i, 0);
             p1 = prte_schizo_base_strip_quotes(pval->value.data.string);
             /* next value on the list is the value */
-            pval = prte_cmd_line_get_param(cmd_line, "genv", i, 1);
+            pval = pmix_cmd_line_get_param(cmd_line, "genv", i, 1);
             p2 = prte_schizo_base_strip_quotes(pval->value.data.string);
-            prte_setenv(p1, p2, true, dstenv);
+            pmix_setenv(p1, p2, true, dstenv);
             free(p1);
             free(p2);
         }
@@ -829,29 +829,29 @@ static int check_sanity(prte_cmd_line_t *cmd_line)
 
     bool hwtcpus = false;
 
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "map-by")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "map-by");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, "map-by")) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, "map-by");
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "rank-by")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "rank-by");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, "rank-by")) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, "rank-by");
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "bind-to")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "bind-to");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, "bind-to")) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, "bind-to");
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "output")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "output");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, "output")) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, "output");
         return PRTE_ERR_SILENT;
     }
-    if (1 < prte_cmd_line_get_ninsts(cmd_line, "display")) {
-        prte_show_help("help-schizo-base.txt", "multi-instances", true, "display");
+    if (1 < pmix_cmd_line_get_ninsts(cmd_line, "display")) {
+        pmix_show_help("help-schizo-base.txt", "multi-instances", true, "display");
         return PRTE_ERR_SILENT;
     }
 
     /* quick check that we have valid directives */
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "map-by", 0, 0))) {
+    if (NULL != (pval = pmix_cmd_line_get_param(cmd_line, "map-by", 0, 0))) {
         if (NULL != strcasestr(pval->value.data.string, "HWTCPUS")) {
             hwtcpus = true;
         }
@@ -860,31 +860,31 @@ static int check_sanity(prte_cmd_line_t *cmd_line)
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "rank-by", 0, 0))) {
+    if (NULL != (pval = pmix_cmd_line_get_param(cmd_line, "rank-by", 0, 0))) {
         if (!prte_schizo_base_check_directives("rank-by", rankers, rkquals, pval->value.data.string)) {
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "bind-to", 0, 0))) {
+    if (NULL != (pval = pmix_cmd_line_get_param(cmd_line, "bind-to", 0, 0))) {
         if (!prte_schizo_base_check_directives("bind-to", binders, bndquals, pval->value.data.string)) {
             return PRTE_ERR_SILENT;
         }
         if (0 == strncasecmp(pval->value.data.string, "HWTHREAD", strlen("HWTHREAD")) && !hwtcpus) {
             /* if we are told to bind-to hwt, then we have to be treating
              * hwt's as the allocatable unit */
-            prte_show_help("help-prte-rmaps-base.txt", "invalid-combination", true);
+            pmix_show_help("help-prte-rmaps-base.txt", "invalid-combination", true);
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "output", 0, 0))) {
+    if (NULL != (pval = pmix_cmd_line_get_param(cmd_line, "output", 0, 0))) {
         if (!prte_schizo_base_check_directives("output", outputs, outquals, pval->value.data.string)) {
             return PRTE_ERR_SILENT;
         }
     }
 
-    if (NULL != (pval = prte_cmd_line_get_param(cmd_line, "display", 0, 0))) {
+    if (NULL != (pval = pmix_cmd_line_get_param(cmd_line, "display", 0, 0))) {
         if (!prte_schizo_base_check_directives("display", displays, NULL, pval->value.data.string)) {
             return PRTE_ERR_SILENT;
         }

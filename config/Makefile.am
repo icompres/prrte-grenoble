@@ -15,7 +15,7 @@
 # Copyright (c) 2014-2019 Intel, Inc.  All rights reserved.
 # Copyright (c) 2016      Research Organization for Information Science
 #                         and Technology (RIST). All rights reserved.
-# Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+# Copyright (c) 2021-2022 Nanook Consulting  All rights reserved.
 # $COPYRIGHT$
 #
 # Additional copyrights may follow
@@ -32,7 +32,5 @@ EXTRA_DIST = \
         prte_mca_priority_sort.pl \
         find_common_syms \
         getdate.sh \
-        make_manpage.pl \
-        md2nroff.pl \
         from-savannah/upstream-config.guess \
         from-savannah/upstream-config.sub

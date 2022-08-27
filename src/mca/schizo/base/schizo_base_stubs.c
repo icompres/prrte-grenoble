@@ -3,7 +3,7 @@
  * Copyright (c) 2015-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2020      IBM Corporation.  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -16,33 +16,15 @@
 
 #include <ctype.h>
 
-#include "src/class/prte_list.h"
+#include "src/class/pmix_list.h"
 
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/schizo/base/base.h"
 #include "src/runtime/prte_globals.h"
-#include "src/util/argv.h"
+#include "src/util/pmix_argv.h"
 #include "src/util/name_fns.h"
-#include "src/util/prte_environ.h"
-#include "src/util/show_help.h"
-
-int prte_schizo_base_parse_env(prte_cmd_line_t *cmd_line, char **srcenv, char ***dstenv,
-                               bool cmdline)
-{
-    int rc;
-    prte_schizo_base_active_module_t *mod;
-
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->parse_env) {
-            rc = mod->module->parse_env(cmd_line, srcenv, dstenv, cmdline);
-            if (PRTE_SUCCESS != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc) {
-                return rc;
-            }
-        }
-    }
-    return PRTE_SUCCESS;
-}
+#include "src/util/pmix_environ.h"
+#include "src/util/pmix_show_help.h"
 
 prte_schizo_base_module_t *prte_schizo_base_detect_proxy(char *cmdpath)
 {
@@ -50,7 +32,7 @@ prte_schizo_base_module_t *prte_schizo_base_detect_proxy(char *cmdpath)
     prte_schizo_base_module_t *md = NULL;
     int pri = -1, p;
 
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
+    PMIX_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
     {
         if (NULL != mod->module->detect_proxy) {
             p = mod->module->detect_proxy(cmdpath);
@@ -80,218 +62,149 @@ PRTE_EXPORT void prte_schizo_base_root_error_msg(void)
     exit(1);
 }
 
-int prte_schizo_base_setup_app(prte_app_context_t *app)
+static bool check_multi(const char *target)
 {
-    int rc;
-    prte_schizo_base_active_module_t *mod;
+    char *multi_dirs[] = {
+        "display",
+        "output",
+        "tune",
+        NULL
+    };
+    int n;
 
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->setup_app) {
-            rc = mod->module->setup_app(app);
-            if (PRTE_SUCCESS != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc) {
-                PRTE_ERROR_LOG(rc);
-                return rc;
-            }
+    for (n=0; NULL != multi_dirs[n]; n++) {
+        if (0 == strcmp(target, multi_dirs[n])) {
+            return true;
         }
     }
-    return PRTE_SUCCESS;
+    return false;
 }
 
-int prte_schizo_base_setup_fork(prte_job_t *jdata, prte_app_context_t *context)
+/* add directive to a PRRTE option that takes a single value */
+int prte_schizo_base_add_directive(pmix_cli_result_t *results,
+                                   const char *deprecated, const char *target,
+                                   char *directive, bool report)
 {
-    int rc;
-    prte_schizo_base_active_module_t *mod;
+    pmix_cli_item_t *opt;
+    char *ptr, *tmp;
 
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->setup_fork) {
-            rc = mod->module->setup_fork(jdata, context);
-            if (PRTE_SUCCESS != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc) {
-                PRTE_ERROR_LOG(rc);
-                return rc;
-            }
-        }
-    }
-    return PRTE_SUCCESS;
-}
-
-int prte_schizo_base_setup_child(prte_job_t *jdata, prte_proc_t *child, prte_app_context_t *app,
-                                 char ***env)
-{
-    int rc;
-    prte_schizo_base_active_module_t *mod;
-
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->setup_child) {
-            rc = mod->module->setup_child(jdata, child, app, env);
-            if (PRTE_SUCCESS != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc) {
-                PRTE_ERROR_LOG(rc);
-                return rc;
-            }
-        }
-    }
-    return PRTE_SUCCESS;
-}
-
-void prte_schizo_base_job_info(prte_cmd_line_t *cmdline, void *jobinfo)
-{
-    prte_schizo_base_active_module_t *mod;
-
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->job_info) {
-            mod->module->job_info(cmdline, jobinfo);
-        }
-    }
-}
-
-int prte_schizo_base_check_sanity(prte_cmd_line_t *cmdline)
-{
-    int rc;
-    prte_schizo_base_active_module_t *mod;
-
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->check_sanity) {
-            rc = mod->module->check_sanity(cmdline);
-            if (PRTE_SUCCESS != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc) {
-                return rc;
-            }
-        }
-    }
-    return PRTE_SUCCESS;
-}
-
-void prte_schizo_base_finalize(void)
-{
-    prte_schizo_base_active_module_t *mod;
-
-    PRTE_LIST_FOREACH(mod, &prte_schizo_base.active_modules, prte_schizo_base_active_module_t)
-    {
-        if (NULL != mod->module->finalize) {
-            mod->module->finalize();
-        }
-    }
-}
-
-int prte_schizo_base_process_deprecated_cli(prte_cmd_line_t *cmdline, int *argc, char ***argv,
-                                            char **options, bool single_dash_okay,
-                                            prte_schizo_convertor_fn_t convert)
-{
-    int pargc;
-    char **pargs, *p2;
-    int i, n, rc, ret;
-    prte_cmd_line_init_t e;
-    prte_cmd_line_option_t *option;
-    bool found;
-
-    pargs = *argv;
-    pargc = *argc;
-    ret = PRTE_SUCCESS;
-
-    /* check for deprecated cmd line options */
-    for (i = 1; i < pargc && NULL != pargs[i]; i++) {
-        /* Are we done?  i.e., did we find the special "--" token? */
-        if (0 == strcmp(pargs[i], "--")) {
-            break;
-        }
-
-        /* check for option */
-        if ('-' != pargs[i][0]) {
-            /* not an option - we are done. Note that options
-             * are required to increment past their arguments
-             * so we don't mistakenly think we are at the end */
-            break;
-        }
-
-        if ('-' != pargs[i][1] && 2 < strlen(pargs[i])) {
-            /* we know this is incorrect */
-            p2 = strdup(pargs[i]);
-            free(pargs[i]);
-            prte_asprintf(&pargs[i], "-%s", p2);
-            /* if it is the special "-np" option, we silently
-             * change it and don't emit an error */
-            if (0 == strcmp(p2, "-np")) {
-                free(p2);
-            } else if (!single_dash_okay) {
-                prte_show_help("help-schizo-base.txt", "single-dash-error", true, p2, pargs[i]);
-                free(p2);
-                ret = PRTE_OPERATION_SUCCEEDED;
-            }
-        }
-
-        /* is this an argument someone needs to convert? */
-        found = false;
-        for (n = 0; NULL != options[n]; n++) {
-            if (0 == strcmp(pargs[i], options[n])) {
-                rc = convert(options[n], argv, i);
-                if (PRTE_SUCCESS != rc && PRTE_ERR_SILENT != rc && PRTE_ERR_TAKE_NEXT_OPTION != rc
-                    && PRTE_OPERATION_SUCCEEDED != rc) {
-                    return rc;
+    /* does the matching key already exist? */
+    opt = pmix_cmd_line_get_param(results, target);
+    if (NULL != opt) {
+        // does it already have a value?
+        if (NULL == opt->values) {
+            // technically this should never happen, but...
+            pmix_argv_append_nosize(&opt->values, directive);
+        } else if (1 < pmix_argv_count(opt->values)) {
+            // cannot use this function
+            ptr = pmix_show_help_string("help-schizo-base.txt", "too-many-values",
+                                        true, target);
+            fprintf(stderr, "%s\n", ptr);
+            return PRTE_ERR_SILENT;
+        } else {
+            // does this contain only a qualifier?
+            if (':' == opt->values[0][0]) {
+                // prepend it with the directive
+                pmix_asprintf(&tmp, "%s%s", directive, opt->values[0]);
+                free(opt->values[0]);
+                opt->values[0] = tmp;
+            } else {
+                // do we allow multiple directives?
+                if (!check_multi(target)) {
+                    // report the error
+                    tmp = pmix_argv_join(opt->values, ',');
+                    ptr = pmix_show_help_string("help-schizo-base.txt", "too-many-directives",
+                                                true, target, tmp, deprecated, directive);
+                    free(tmp);
+                    fprintf(stderr, "%s\n", ptr);
+                    return PRTE_ERR_SILENT;
                 }
-                if (PRTE_ERR_TAKE_NEXT_OPTION == rc) {
-                    /* we did the conversion but don't want
-                     * to deprecate i */
-                    rc = PRTE_SUCCESS;
-                } else if (PRTE_OPERATION_SUCCEEDED == rc) {
-                    /* Advance past any command line option
-                     * parameters */
-                    memset(&e, 0, sizeof(prte_cmd_line_init_t));
-                    e.ocl_cmd_long_name = &pargs[i][2];
-                    option = prte_cmd_line_find_option(cmdline, &e);
-                    i += option->clo_num_params;
-                    rc = PRTE_ERR_SILENT;
+                // does the value contain a qualifier?
+                if (NULL != (ptr = strchr(opt->values[0], ':'))) {
+                    // split the value at the qualifier
+                    *ptr = '\0';
+                    ++ptr;
+                    // form the new value
+                    pmix_asprintf(&tmp, "%s,%s:%s", opt->values[0], directive, ptr);
+                    free(opt->values[0]);
+                    opt->values[0] = tmp;
                 } else {
-                    --i;
+                    // append the directive to the pre-existing ones
+                    pmix_asprintf(&tmp, "%s,%s", opt->values[0], directive);
+                    free(opt->values[0]);
+                    opt->values[0] = tmp;
                 }
-                found = true;
-                if (PRTE_ERR_SILENT != rc) {
-                    ret = PRTE_OPERATION_SUCCEEDED;
-                }
-                pargs = *argv;
-                pargc = prte_argv_count(pargs);
-                break; // for loop
             }
         }
-
-        if (!found) {
-            /* check for single-dash option */
-            if (2 == strlen(pargs[i])) {
-                /* find the option */
-                memset(&e, 0, sizeof(prte_cmd_line_init_t));
-                e.ocl_cmd_short_name = pargs[i][1];
-                option = prte_cmd_line_find_option(cmdline, &e);
-
-                /* if this isn't an option, then we are done */
-                if (NULL == option) {
-                    break;
-                }
-
-                /* increment past the number of arguments for this option */
-                i += option->clo_num_params;
-            }
-            /* check if we are done */
-            else {
-                /* find the option */
-                memset(&e, 0, sizeof(prte_cmd_line_init_t));
-                e.ocl_cmd_long_name = &pargs[i][2];
-                option = prte_cmd_line_find_option(cmdline, &e);
-
-                /* if this isn't an option, then we are done */
-                if (NULL == option) {
-                    break;
-                }
-
-                /* increment past the number of arguments for this option */
-                i += option->clo_num_params;
-            }
-        }
+    } else {
+        // add the new option
+        opt = PMIX_NEW(pmix_cli_item_t);
+        opt->key = strdup(target);
+        pmix_argv_append_nosize(&opt->values, directive);
+        pmix_list_append(&results->instances, &opt->super);
     }
-    *argc = pargc;
 
-    return ret;
+    if (report) {
+        pmix_asprintf(&tmp, "--%s %s", target, directive);
+        /* can't just call show_help as we want every instance to be reported */
+        ptr = pmix_show_help_string("help-schizo-base.txt", "deprecated-converted",
+                                    true, deprecated, tmp);
+        fprintf(stderr, "%s\n", ptr);
+        free(tmp);
+        free(ptr);
+    }
+    return PRTE_SUCCESS;
+}
+
+/* add qualifier to a PRRTE option that takes a single value */
+int prte_schizo_base_add_qualifier(pmix_cli_result_t *results,
+                                   char *deprecated, char *target,
+                                   char *qualifier, bool report)
+{
+    pmix_cli_item_t *opt;
+    char *ptr, *tmp;
+
+    /* does the matching key already exist? */
+    opt = pmix_cmd_line_get_param(results, target);
+    if (NULL != opt) {
+        // does it already have a value?
+        if (NULL == opt->values) {
+            // technically this should never happen, but...
+            pmix_asprintf(&tmp, ":%s", qualifier);
+            pmix_argv_append_nosize(&opt->values, tmp);
+            free(tmp);
+        } else if (1 < pmix_argv_count(opt->values)) {
+            // cannot use this function
+            ptr = pmix_show_help_string("help-schizo-base.txt", "too-many-values",
+                                        true, target);
+            fprintf(stderr, "%s\n", ptr);
+            return PRTE_ERR_SILENT;
+        } else {
+            // append with a colon delimiter
+            pmix_asprintf(&tmp, "%s:%s", opt->values[0], qualifier);
+            free(opt->values[0]);
+            opt->values[0] = tmp;
+        }
+    } else {
+        // add the new option
+        opt = PMIX_NEW(pmix_cli_item_t);
+        opt->key = strdup(target);
+        pmix_asprintf(&tmp, ":%s", qualifier);
+        pmix_argv_append_nosize(&opt->values, tmp);
+        free(tmp);
+        pmix_list_append(&results->instances, &opt->super);
+    }
+
+    if (report) {
+        pmix_asprintf(&tmp, "--%s :%s", target, qualifier);
+        /* can't just call show_help as we want every instance to be reported */
+        ptr = pmix_show_help_string("help-schizo-base.txt", "deprecated-converted",
+                                    true, deprecated, tmp);
+        fprintf(stderr, "%s\n", ptr);
+        free(tmp);
+        free(ptr);
+    }
+    return PRTE_SUCCESS;
 }
 
 char *prte_schizo_base_getline(FILE *fp)
@@ -308,45 +221,6 @@ char *prte_schizo_base_getline(FILE *fp)
     }
 
     return NULL;
-}
-
-bool prte_schizo_base_check_ini(char *cmdpath, char *file)
-{
-    FILE *fp;
-    char *line;
-    size_t n;
-
-    if (NULL == cmdpath || NULL == file) {
-        return false;
-    }
-
-    /* look for an open-mpi.ini or ompi.ini file */
-    fp = fopen(file, "r");
-    if (NULL == fp) {
-        return false;
-    }
-    /* read the file to find the proxy defnitions */
-    while (NULL != (line = prte_schizo_base_getline(fp))) {
-        if ('\0' == line[0]) {
-            continue; /* skip empty lines */
-        }
-        /* find the start of text in the line */
-        n = 0;
-        while ('\0' != line[n] && isspace(line[n])) {
-            ++n;
-        }
-        /* if the text starts with a '#' or the line
-         * is empty, then ignore it */
-        if ('\0' == line[n] || '#' == line[n]) {
-            /* empty line or comment */
-            continue;
-        }
-        if (0 == strcmp(cmdpath, &line[n])) {
-            /* this is us! */
-            return true;
-        }
-    }
-    return false;
 }
 
 char *prte_schizo_base_strip_quotes(char *p)
@@ -387,8 +261,28 @@ static char *prte_frameworks[] = {
     "rtc",
     "schizo",
     "state",
+    // inherited from OPAL
+    "hwloc",
+    "if",
+    "reachable",
     NULL,
 };
+
+bool prte_schizo_base_check_prte_param(char *param)
+{
+    char **tmp;
+    size_t n;
+
+    tmp = pmix_argv_split(param, '_');
+    for (n=0; NULL != prte_frameworks[n]; n++) {
+        if (0 == strncmp(tmp[0], prte_frameworks[n], strlen(prte_frameworks[n]))) {
+            pmix_argv_free(tmp);
+            return true;
+        }
+    }
+    pmix_argv_free(tmp);
+    return false;
+}
 
 int prte_schizo_base_parse_prte(int argc, int start, char **argv, char ***target)
 {
@@ -408,13 +302,14 @@ int prte_schizo_base_parse_prte(int argc, int start, char **argv, char ***target
                 /* push it into our environment */
                 asprintf(&param, "PRTE_MCA_%s", p1);
                 prte_output_verbose(1, prte_schizo_base_framework.framework_output,
-                                    "%s schizo:prte:parse_cli pushing %s into environment",
-                                    PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), param);
-                prte_setenv(param, p2, true, &environ);
+                                    "%s schizo:prte:parse_cli pushing %s=%s into environment",
+                                    PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), param, p2);
+                setenv(param, p2, true);
+                free(param);
             } else {
-                prte_argv_append_nosize(target, "--prtemca");
-                prte_argv_append_nosize(target, p1);
-                prte_argv_append_nosize(target, p2);
+                pmix_argv_append_nosize(target, "--prtemca");
+                pmix_argv_append_nosize(target, p1);
+                pmix_argv_append_nosize(target, p2);
             }
             free(p1);
             free(p2);
@@ -447,33 +342,84 @@ int prte_schizo_base_parse_prte(int argc, int start, char **argv, char ***target
                  * one so we know this has been processed */
                 free(argv[i]);
                 argv[i] = strdup("--prtemca");
+                /* if this refers to the "if" framework, convert to "prteif" */
+                if (0 == strncasecmp(p1, "if", 2)) {
+                    pmix_asprintf(&param, "prteif_%s", &p1[3]);
+                    free(p1);
+                    p1 = param;
+                } else if (0 == strncasecmp(p1, "reachable", strlen("reachable"))) {
+                    pmix_asprintf(&param, "prtereachable_%s", &p1[strlen("reachable_")]);
+                    free(p1);
+                    p1 = param;
+                } else if (0 == strncasecmp(p1, "dl", strlen("dl"))) {
+                    pmix_asprintf(&param, "prtedl_%s", &p1[strlen("dl_")]);
+                    free(p1);
+                    p1 = param;
+                }
                 if (NULL == target) {
                     /* push it into our environment */
                     asprintf(&param, "PRTE_MCA_%s", p1);
                     prte_output_verbose(1, prte_schizo_base_framework.framework_output,
                                         "%s schizo:prte:parse_cli pushing %s into environment",
-                                        PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), param);
-                    prte_setenv(param, p2, true, &environ);
+                                        PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), p1);
+                    setenv(param, p2, true);
+                    free(param);
                 } else {
-                    prte_argv_append_nosize(target, "--prtemca");
-                    prte_argv_append_nosize(target, p1);
-                    prte_argv_append_nosize(target, p2);
+                    prte_output_verbose(1, prte_schizo_base_framework.framework_output,
+                                        "%s schizo:prte:parse_cli adding %s to target",
+                                        PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), p1);
+                    pmix_argv_append_nosize(target, "--prtemca");
+                    pmix_argv_append_nosize(target, p1);
+                    pmix_argv_append_nosize(target, p2);
                 }
-                free(p1);
-                free(p2);
                 i += 2;
-                continue;
             }
+            free(p1);
+            free(p2);
         }
     }
     return PRTE_SUCCESS;
 }
 
 static char *pmix_frameworks[] = {
-    "bfrops",  "gds",    "pcompress", "pdl",   "pfexec", "pif", "pinstalldirs",
-    "ploc",    "plog",   "pmdl",      "pnet",  "preg",   "prm", "psec",
-    "psensor", "pshmem", "psquash",   "pstat", "pstrg",  "ptl", NULL,
+    "bfrops",
+    "gds",
+    "pcompress",
+    "pdl",
+    "pfexec",
+    "pif",
+    "pinstalldirs",
+    "ploc",
+    "plog",
+    "pmdl",
+    "pnet",
+    "preg",
+    "prm",
+    "psec",
+    "psensor",
+    "pshmem",
+    "psquash",
+    "pstat",
+    "pstrg",
+    "ptl",
+    NULL
 };
+
+bool prte_schizo_base_check_pmix_param(char *param)
+{
+    char **tmp;
+    size_t n;
+
+    tmp = pmix_argv_split(param, '_');
+    for (n=0; NULL != pmix_frameworks[n]; n++) {
+        if (0 == strncmp(tmp[0], pmix_frameworks[n], strlen(pmix_frameworks[n]))) {
+            pmix_argv_free(tmp);
+            return true;
+        }
+    }
+    pmix_argv_free(tmp);
+    return false;
+}
 
 int prte_schizo_base_parse_pmix(int argc, int start, char **argv, char ***target)
 {
@@ -497,11 +443,12 @@ int prte_schizo_base_parse_pmix(int argc, int start, char **argv, char ***target
                 prte_output_verbose(1, prte_schizo_base_framework.framework_output,
                                     "%s schizo:pmix:parse_cli pushing %s into environment",
                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), param);
-                prte_setenv(param, p2, true, &environ);
+                setenv(param, p2, true);
+                free(param);
             } else {
-                prte_argv_append_nosize(target, argv[i]);
-                prte_argv_append_nosize(target, p1);
-                prte_argv_append_nosize(target, p2);
+                pmix_argv_append_nosize(target, argv[i]);
+                pmix_argv_append_nosize(target, p1);
+                pmix_argv_append_nosize(target, p2);
             }
             free(p1);
             free(p2);
@@ -534,17 +481,32 @@ int prte_schizo_base_parse_pmix(int argc, int start, char **argv, char ***target
                  * one so we know this has been processed */
                 free(argv[i]);
                 argv[i] = strdup("--pmixmca");
+                /* if this refers to the "if" framework, convert to "pif" */
+                if (0 == strncasecmp(p1, "if", 2)) {
+                    pmix_asprintf(&param, "pif_%s", &p1[3]);
+                    free(p1);
+                    p1 = param;
+                } else if (0 == strncasecmp(p1, "reachable", strlen("reachable"))) {
+                    pmix_asprintf(&param, "preachable_%s", &p1[strlen("reachable_")]);
+                    free(p1);
+                    p1 = param;
+                } else if (0 == strncasecmp(p1, "dl", strlen("dl"))) {
+                    pmix_asprintf(&param, "pdl_%s", &p1[strlen("dl_")]);
+                    free(p1);
+                    p1 = param;
+                }
                 if (NULL == target) {
                     /* push it into our environment */
                     asprintf(&param, "PMIX_MCA_%s", p1);
                     prte_output_verbose(1, prte_schizo_base_framework.framework_output,
                                         "%s schizo:pmix:parse_cli pushing %s into environment",
                                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), param);
-                    prte_setenv(param, p2, true, &environ);
+                    setenv(param, p2, true);
+                    free(param);
                 } else {
-                    prte_argv_append_nosize(target, "--pmixmca");
-                    prte_argv_append_nosize(target, p1);
-                    prte_argv_append_nosize(target, p2);
+                    pmix_argv_append_nosize(target, "--pmixmca");
+                    pmix_argv_append_nosize(target, p1);
+                    pmix_argv_append_nosize(target, p2);
                 }
             }
             free(p1);

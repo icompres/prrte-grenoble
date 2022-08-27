@@ -17,7 +17,7 @@
  *                         and Technology (RIST). All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
  * Copyright (c) 2020      IBM Corporation.  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -39,17 +39,16 @@
 #endif
 
 #include "src/mca/mca.h"
-#include "src/threads/threads.h"
-#include "src/util/argv.h"
-#include "src/util/prte_environ.h"
+#include "src/threads/pmix_threads.h"
+#include "src/util/pmix_argv.h"
+#include "src/util/pmix_environ.h"
 
 #include "constants.h"
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/ess/ess.h"
 #include "src/mca/ras/base/base.h"
-#include "src/mca/rml/rml.h"
-#include "src/mca/rml/rml_types.h"
-#include "src/mca/routed/routed.h"
+#include "src/rml/rml.h"
+#include "src/mca/schizo/base/base.h"
 #include "src/mca/state/state.h"
 #include "src/pmix/pmix-internal.h"
 #include "src/runtime/prte_globals.h"
@@ -57,6 +56,7 @@
 #include "src/util/error_strings.h"
 #include "src/util/name_fns.h"
 #include "src/util/proc_info.h"
+#include "src/util/pmix_show_help.h"
 #include "types.h"
 
 #include "src/mca/plm/base/base.h"
@@ -75,15 +75,15 @@ int prte_plm_base_comm_start(void)
     PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                          "%s plm:base:receive start comm", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
 
-    prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PLM, PRTE_RML_PERSISTENT,
-                            prte_plm_base_recv, NULL);
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PLM,
+                  PRTE_RML_PERSISTENT, prte_plm_base_recv, NULL);
     if (PRTE_PROC_IS_MASTER) {
-        prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PRTED_CALLBACK,
-                                PRTE_RML_PERSISTENT, prte_plm_base_daemon_callback, NULL);
-        prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_REPORT_REMOTE_LAUNCH,
-                                PRTE_RML_PERSISTENT, prte_plm_base_daemon_failed, NULL);
-        prte_rml.recv_buffer_nb(PRTE_NAME_WILDCARD, PRTE_RML_TAG_TOPOLOGY_REPORT,
-                                PRTE_RML_PERSISTENT, prte_plm_base_daemon_topology, NULL);
+        PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PRTED_CALLBACK,
+                      PRTE_RML_PERSISTENT, prte_plm_base_daemon_callback, NULL);
+        PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_REPORT_REMOTE_LAUNCH,
+                      PRTE_RML_PERSISTENT, prte_plm_base_daemon_failed, NULL);
+        PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_TOPOLOGY_REPORT,
+                      PRTE_RML_PERSISTENT, prte_plm_base_daemon_topology, NULL);
     }
     recv_issued = true;
 
@@ -99,11 +99,11 @@ int prte_plm_base_comm_stop(void)
     PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                          "%s plm:base:receive stop comm", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
 
-    prte_rml.recv_cancel(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PLM);
+    PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PLM);
     if (PRTE_PROC_IS_MASTER) {
-        prte_rml.recv_cancel(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PRTED_CALLBACK);
-        prte_rml.recv_cancel(PRTE_NAME_WILDCARD, PRTE_RML_TAG_REPORT_REMOTE_LAUNCH);
-        prte_rml.recv_cancel(PRTE_NAME_WILDCARD, PRTE_RML_TAG_TOPOLOGY_REPORT);
+        PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_PRTED_CALLBACK);
+        PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_REPORT_REMOTE_LAUNCH);
+        PRTE_RML_CANCEL(PRTE_NAME_WILDCARD, PRTE_RML_TAG_TOPOLOGY_REPORT);
     }
     recv_issued = false;
 
@@ -132,6 +132,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
     char **env;
     char *prefix_dir, *tmp;
     pmix_rank_t tgt, *tptr;
+    pmix_value_t pidval = PMIX_VALUE_STATIC_INIT;
+    PRTE_HIDE_UNUSED_PARAMS(status, tag, cbdata);
 
     PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                          "%s plm:base:receive processing msg", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME)));
@@ -156,11 +158,11 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             goto CLEANUP;
         }
         /* the new nspace is our base nspace with an "@N" extension */
-        prte_asprintf(&tmp, "%s@%u", prte_plm_globals.base_nspace, prte_plm_globals.next_jobid);
+        pmix_asprintf(&tmp, "%s@%u", prte_plm_globals.base_nspace, prte_plm_globals.next_jobid);
         PMIX_LOAD_NSPACE(job, tmp);
         free(tmp);
         prte_plm_globals.next_jobid++;
-        PRTE_CONSTRUCT(&jb, prte_job_t);
+        PMIX_CONSTRUCT(&jb, prte_job_t);
 
         /* setup the response */
         PMIX_DATA_BUFFER_CREATE(answer);
@@ -184,10 +186,10 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         }
 
         /* send the response back to the sender */
-        if (0 > (ret = prte_rml.send_buffer_nb(sender, answer, PRTE_RML_TAG_JOBID_RESP,
-                                               prte_rml_send_callback, NULL))) {
+        PRTE_RML_SEND(ret, sender->rank, answer, PRTE_RML_TAG_JOBID_RESP);
+        if (PRTE_SUCCESS != ret) {
             PRTE_ERROR_LOG(ret);
-            PRTE_RELEASE(answer);
+            PMIX_DATA_BUFFER_RELEASE(answer);
         }
         break;
 
@@ -207,6 +209,20 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         /* record the sender so we know who to respond to */
         PMIX_LOAD_PROCID(&jdata->originator, sender->nspace, sender->rank);
 
+        /* assign a schizo module */
+        if (NULL == jdata->personality) {
+            pmix_argv_append_nosize(&jdata->personality, "prte");
+        }
+        tmp = pmix_argv_join(jdata->personality, ',');
+        jdata->schizo = (struct prte_schizo_base_module_t*)prte_schizo_base_detect_proxy(tmp);
+        if (NULL == jdata->schizo) {
+            pmix_show_help("help-schizo-base.txt", "no-proxy", true, prte_tool_basename, tmp);
+            free(tmp);
+            rc = PRTE_ERR_NOT_FOUND;
+            goto ANSWER_LAUNCH;
+        }
+        free(tmp);
+
         /* get the name of the actual spawn parent - i.e., the proc that actually
          * requested the spawn */
         if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_LAUNCH_PROXY, (void **) &nptr, PMIX_PROC)) {
@@ -218,8 +234,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         /* get the parent's job object */
         if (NULL != (parent = prte_get_job_data_object(nptr->nspace))) {
             /* link the spawned job to the spawner */
-            PRTE_RETAIN(jdata);
-            prte_list_append(&parent->children, &jdata->super);
+            PMIX_RETAIN(jdata);
+            pmix_list_append(&parent->children, &jdata->super);
             /* connect the launcher as well */
             if (PMIX_NSPACE_INVALID(parent->launcher)) {
                 /* we are an original spawn */
@@ -234,8 +250,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
              * need to check that here. However, be sure not to overwrite
              * the prefix if the user already provided it!
              */
-            app = (prte_app_context_t *) prte_pointer_array_get_item(parent->apps, 0);
-            child_app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, 0);
+            app = (prte_app_context_t *) pmix_pointer_array_get_item(parent->apps, 0);
+            child_app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, 0);
             if (NULL != app && NULL != child_app) {
                 prefix_dir = NULL;
                 if (prte_get_attribute(&app->attributes, PRTE_APP_PREFIX_DIR,
@@ -257,12 +273,12 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
          */
         if (NULL != prte_forwarded_envars) {
             for (i = 0; i < jdata->apps->size; i++) {
-                app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, i);
+                app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, i);
                 if (NULL == app) {
                     continue;
                 }
-                env = prte_environ_merge(prte_forwarded_envars, app->env);
-                prte_argv_free(app->env);
+                env = pmix_environ_merge(prte_forwarded_envars, app->env);
+                pmix_argv_free(app->env);
                 app->env = env;
             }
         }
@@ -280,7 +296,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         if (NULL != parent && !PRTE_FLAG_TEST(parent, PRTE_JOB_FLAG_TOOL)) {
             if (NULL == parent->bookmark) {
                 /* find the sender's node in the job map */
-                proc = (prte_proc_t *) prte_pointer_array_get_item(parent->procs, sender->rank);
+                proc = (prte_proc_t *) pmix_pointer_array_get_item(parent->procs, sender->rank);
                 if (NULL != proc) {
                     /* set the bookmark so the child starts from that place - this means
                      * that the first child process could be co-located with the proc
@@ -292,12 +308,10 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             } else {
                 jdata->bookmark = parent->bookmark;
             }
-            /* provide the parent's last object */
-            jdata->bkmark_obj = parent->bkmark_obj;
         }
 
         if (!prte_dvm_ready) {
-            prte_pointer_array_add(prte_cache, jdata);
+            pmix_pointer_array_add(prte_cache, jdata);
             return;
         }
 
@@ -340,10 +354,10 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         }
 
         /* send the response back to the sender */
-        if (0 > (ret = prte_rml.send_buffer_nb(sender, answer, PRTE_RML_TAG_LAUNCH_RESP,
-                                               prte_rml_send_callback, NULL))) {
+        PRTE_RML_SEND(ret, sender->rank, answer, PRTE_RML_TAG_LAUNCH_RESP);
+        if (PRTE_SUCCESS != ret) {
             PRTE_ERROR_LOG(ret);
-            PRTE_RELEASE(answer);
+            PMIX_DATA_BUFFER_RELEASE(answer);
         }
         break;
 
@@ -392,13 +406,13 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                 }
 
                 PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
-                                     "%s plm:base:receive got update_proc_state for vpid %u state %s exit_code %d",
-                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid, prte_proc_state_to_str(state),
+                                     "%s plm:base:receive got update_proc_state for vpid %u pid %d state %s exit_code %d",
+                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid, (int)pid, prte_proc_state_to_str(state),
                                      (int) exit_code));
 
                 if (NULL != jdata) {
                     /* get the proc data object */
-                    proc = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, vpid);
+                    proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
                     if (NULL == proc) {
                         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                         PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
@@ -468,7 +482,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                      PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid));
 
                 /* get the proc data object */
-                proc = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, vpid);
+                proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
                 if (NULL == proc) {
                     PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                     PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
@@ -531,7 +545,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                                  "%s plm:base:receive got registered for vpid %u",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid));
-            proc = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, vpid);
+            proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
             if (NULL == proc) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
@@ -571,11 +585,26 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                                  "%s plm:base:receive got local launch complete for vpid %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_VPID_PRINT(vpid)));
-            proc = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, vpid);
+            proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
             if (NULL == proc) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
                 goto CLEANUP;
+            }
+            /* unpack the pid */
+            count = 1;
+            rc = PMIx_Data_unpack(NULL, buffer, &pid, &count, PMIX_PID);
+            if (PMIX_SUCCESS != rc) {
+                PMIX_ERROR_LOG(rc);
+                goto CLEANUP;
+            }
+            proc->pid = pid;
+            pidval.type = PMIX_PID;
+            pidval.data.pid = pid;
+            /* store the PID for later retrieval */
+            rc = PMIx_Store_internal(&proc->name, PMIX_PROC_PID, &pidval);
+            if (PMIX_SUCCESS != rc) {
+                PMIX_ERROR_LOG(rc);
             }
             /* unpack the state */
             count = 1;
@@ -639,5 +668,6 @@ CLEANUP:
 /* where HNP messages come */
 void prte_plm_base_receive_process_msg(int fd, short event, void *data)
 {
+    PRTE_HIDE_UNUSED_PARAMS(fd, event, data);
     assert(0);
 }

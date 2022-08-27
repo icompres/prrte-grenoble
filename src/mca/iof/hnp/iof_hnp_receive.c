@@ -16,7 +16,7 @@
  * Copyright (c) 2017      Mellanox Technologies. All rights reserved.
  * Copyright (c) 2019      Research Organization for Information Science
  *                         and Technology (RIST).  All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -43,9 +43,9 @@
 #include "src/pmix/pmix-internal.h"
 
 #include "src/mca/errmgr/errmgr.h"
-#include "src/mca/rml/rml.h"
+#include "src/rml/rml.h"
 #include "src/runtime/prte_globals.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 #include "src/util/name_fns.h"
 
 #include "src/mca/iof/base/base.h"
@@ -55,25 +55,26 @@
 
 static void lkcbfunc(pmix_status_t status, void *cbdata)
 {
-    prte_pmix_lock_t *lk = (prte_pmix_lock_t *) cbdata;
+    prte_iof_deliver_t *p = (prte_iof_deliver_t*)cbdata;
 
-    PRTE_POST_OBJECT(lk);
-    lk->status = prte_pmix_convert_status(status);
-    PRTE_PMIX_WAKEUP_THREAD(lk);
+    /* nothing to do here - we use this solely to
+     * ensure that IOF_deliver doesn't block */
+    if (PMIX_SUCCESS != status) {
+        PMIX_ERROR_LOG(status);
+    }
+    PMIX_RELEASE(p);
 }
 
 void prte_iof_hnp_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
                        prte_rml_tag_t tag, void *cbdata)
 {
     pmix_proc_t origin;
-    unsigned char data[PRTE_IOF_BASE_MSG_MAX];
     prte_iof_tag_t stream;
     int32_t count, numbytes;
     int rc;
     prte_iof_proc_t *proct;
     pmix_iof_channel_t pchan;
-    pmix_byte_object_t bo;
-    prte_pmix_lock_t lock;
+    prte_iof_deliver_t *p;
     pmix_status_t prc;
 
     PRTE_OUTPUT_VERBOSE((1, prte_iof_base_framework.framework_output,
@@ -85,22 +86,6 @@ void prte_iof_hnp_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
     rc = PMIx_Data_unpack(NULL, buffer, &stream, &count, PMIX_UINT16);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
-        goto CLEAN_RETURN;
-    }
-
-    if (PRTE_IOF_XON & stream) {
-        /* re-start the stdin read event */
-        if (NULL != prte_iof_hnp_component.stdinev && !prte_job_term_ordered
-            && !prte_iof_hnp_component.stdinev->active) {
-            PRTE_IOF_READ_ACTIVATE(prte_iof_hnp_component.stdinev);
-        }
-        goto CLEAN_RETURN;
-    } else if (PRTE_IOF_XOFF & stream) {
-        /* stop the stdin read event */
-        if (NULL != prte_iof_hnp_component.stdinev && !prte_iof_hnp_component.stdinev->active) {
-            prte_event_del(prte_iof_hnp_component.stdinev->ev);
-            prte_iof_hnp_component.stdinev->active = false;
-        }
         goto CLEAN_RETURN;
     }
 
@@ -117,20 +102,33 @@ void prte_iof_hnp_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
                          PRTE_NAME_PRINT(&origin)));
 
     /* this must have come from a daemon forwarding output - unpack the data */
-    numbytes = PRTE_IOF_BASE_MSG_MAX;
-    rc = PMIx_Data_unpack(NULL, buffer, data, &numbytes, PMIX_BYTE);
+    count = 1;
+    rc = PMIx_Data_unpack(NULL, buffer, &numbytes, &count, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
         goto CLEAN_RETURN;
     }
-    /* numbytes will contain the actual #bytes that were sent */
+    if (0 == numbytes) {
+        /* nothing to do - shouldn't have been sent */
+        goto CLEAN_RETURN;
+    }
+    p = PMIX_NEW(prte_iof_deliver_t);
+    PMIX_XFER_PROCID(&p->source, &origin);
+    p->bo.bytes = (char*)malloc(numbytes);
+    rc = PMIx_Data_unpack(NULL, buffer, p->bo.bytes, &numbytes, PMIX_BYTE);
+    if (PMIX_SUCCESS != rc) {
+        PMIX_ERROR_LOG(rc);
+        PMIX_RELEASE(p);
+        goto CLEAN_RETURN;
+    }
+    p->bo.size = numbytes;
 
     PRTE_OUTPUT_VERBOSE((1, prte_iof_base_framework.framework_output,
                          "%s unpacked %d bytes from remote proc %s",
                          PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), numbytes, PRTE_NAME_PRINT(&origin)));
 
     /* do we already have this process in our list? */
-    PRTE_LIST_FOREACH(proct, &prte_iof_hnp_component.procs, prte_iof_proc_t)
+    PMIX_LIST_FOREACH(proct, &prte_iof_hnp_component.procs, prte_iof_proc_t)
     {
         if (PMIX_CHECK_PROCID(&proct->name, &origin)) {
             /* found it */
@@ -139,9 +137,9 @@ void prte_iof_hnp_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buff
     }
 
     /* if we get here, then we don't yet have this proc in our list */
-    proct = PRTE_NEW(prte_iof_proc_t);
+    proct = PMIX_NEW(prte_iof_proc_t);
     PMIX_XFER_PROCID(&proct->name, &origin);
-    prte_list_append(&prte_iof_hnp_component.procs, &proct->super);
+    pmix_list_append(&prte_iof_hnp_component.procs, &proct->super);
 
 NSTEP:
     pchan = 0;
@@ -155,19 +153,11 @@ NSTEP:
         pchan |= PMIX_FWD_STDDIAG_CHANNEL;
     }
     /* output this thru our PMIx server */
-    PMIX_BYTE_OBJECT_CONSTRUCT(&bo);
-    bo.bytes = (char *) data;
-    bo.size = numbytes;
-    PRTE_PMIX_CONSTRUCT_LOCK(&lock);
-    prc = PMIx_server_IOF_deliver(&origin, pchan, &bo, NULL, 0, lkcbfunc,
-                                  (void *) &lock);
+    prc = PMIx_server_IOF_deliver(&p->source, pchan, &p->bo, NULL, 0, lkcbfunc, (void*)p);
     if (PMIX_SUCCESS != prc) {
         PMIX_ERROR_LOG(prc);
-    } else {
-        /* wait for completion */
-        PRTE_PMIX_WAIT_THREAD(&lock);
+        PMIX_RELEASE(p);
     }
-    PRTE_PMIX_DESTRUCT_LOCK(&lock);
 
 CLEAN_RETURN:
     return;

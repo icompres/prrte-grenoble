@@ -14,7 +14,7 @@
  *                         reserved.
  * Copyright (c) 2019      Intel, Inc.  All rights reserved.
  * Copyright (c) 2020      Cisco Systems, Inc.  All rights reserved
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -26,7 +26,7 @@
 
 #include <stdlib.h>
 
-#include "src/runtime/runtime.h"
+#include "src/runtime/prte_globals.h"
 #include "src/util/malloc.h"
 #include "src/util/output.h"
 
@@ -69,7 +69,7 @@ void prte_malloc_finalize(void)
     if (-1 != prte_malloc_output) {
         prte_output_close(prte_malloc_output);
         prte_malloc_output = -1;
-        PRTE_DESTRUCT(&malloc_stream);
+        PMIX_DESTRUCT(&malloc_stream);
     }
 }
 
@@ -78,7 +78,7 @@ void prte_malloc_finalize(void)
  */
 void prte_malloc_init(void)
 {
-    PRTE_CONSTRUCT(&malloc_stream, prte_output_stream_t);
+    PMIX_CONSTRUCT(&malloc_stream, prte_output_stream_t);
     malloc_stream.lds_is_debugging = true;
     malloc_stream.lds_verbose_level = 5;
     malloc_stream.lds_prefix = "malloc debug: ";
@@ -185,6 +185,7 @@ void *prte_realloc(void *ptr, size_t size, const char *file, int line)
  */
 void prte_free(void *addr, const char *file, int line)
 {
+    PRTE_HIDE_UNUSED_PARAMS(file, line);
     free(addr);
 }
 

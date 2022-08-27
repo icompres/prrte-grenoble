@@ -15,7 +15,7 @@
 # Copyright (c) 2019      Research Organization for Information Science
 #                         and Technology (RIST).  All rights reserved.
 # Copyright (c) 2019-2020 Intel, Inc.  All rights reserved.
-# Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+# Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
 # Copyright (c) 2021      Amazon.com, Inc. or its affiliates.
 #                         All Rights reserved.
 # $COPYRIGHT$
@@ -51,8 +51,7 @@ libprrte_la_SOURCES =
 libprrte_la_LIBADD = \
 	mca/base/libprrte_mca_base.la \
 	util/libprrteutil.la \
-	$(MCA_prte_FRAMEWORK_LIBS) \
-	$(PRTE_EXTRA_LIB)
+	$(MCA_prte_FRAMEWORK_LIBS)
 libprrte_la_DEPENDENCIES = \
 	mca/base/libprrte_mca_base.la \
 	util/libprrteutil.la \
@@ -76,14 +75,11 @@ endif
 # setup to catch extra files to be included in tarballs
 EXTRA_DIST = Doxyfile
 
-include class/Makefile.am
 include runtime/Makefile.am
 include tools/Makefile.am
 include prted/Makefile.am
 include mca/Makefile.am
-include sys/Makefile.am
-include threads/Makefile.include
 include pmix/Makefile.am
 include event/Makefile.am
 include hwloc/Makefile.am
-
+include rml/Makefile.am

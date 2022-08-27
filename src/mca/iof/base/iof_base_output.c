@@ -12,7 +12,7 @@
  * Copyright (c) 2008-2020 Cisco Systems, Inc.  All rights reserved
  * Copyright (c) 2017-2020 Intel, Inc.  All rights reserved.
  * Copyright (c) 2017      Mellanox Technologies. All rights reserved.
- * Copyright (c) 2021      Nanook Consulting.  All rights reserved.
+ * Copyright (c) 2021-2022 Nanook Consulting.  All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -42,7 +42,7 @@
 #include "src/mca/errmgr/errmgr.h"
 #include "src/mca/state/state.h"
 #include "src/runtime/prte_globals.h"
-#include "src/threads/threads.h"
+#include "src/threads/pmix_threads.h"
 #include "src/util/name_fns.h"
 
 #include "src/mca/iof/base/base.h"
@@ -53,6 +53,7 @@ int prte_iof_base_write_output(const pmix_proc_t *name, prte_iof_tag_t stream,
 {
     prte_iof_write_output_t *output;
     int num_buffered;
+    PRTE_HIDE_UNUSED_PARAMS(stream);
 
     PRTE_OUTPUT_VERBOSE(
         (1, prte_iof_base_framework.framework_output,
@@ -60,8 +61,12 @@ int prte_iof_base_write_output(const pmix_proc_t *name, prte_iof_tag_t stream,
          PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), numbytes,
          PRTE_NAME_PRINT(name), (NULL == channel) ? -1 : channel->fd));
 
+    if (NULL == channel) {
+        return 0;
+    }
+
     /* setup output object */
-    output = PRTE_NEW(prte_iof_write_output_t);
+    output = PMIX_NEW(prte_iof_write_output_t);
 
     /* copy over the data to be written */
     if (0 < numbytes) {
@@ -73,10 +78,10 @@ int prte_iof_base_write_output(const pmix_proc_t *name, prte_iof_tag_t stream,
     }
     output->numbytes = numbytes;
     /* add this data to the write list for this fd */
-    prte_list_append(&channel->outputs, &output->super);
+    pmix_list_append(&channel->outputs, &output->super);
 
     /* record how big the buffer is */
-    num_buffered = prte_list_get_size(&channel->outputs);
+    num_buffered = pmix_list_get_size(&channel->outputs);
 
     /* is the write event issued? */
     if (!channel->pending) {
@@ -94,30 +99,31 @@ void prte_iof_base_write_handler(int _fd, short event, void *cbdata)
 {
     prte_iof_sink_t *sink = (prte_iof_sink_t *) cbdata;
     prte_iof_write_event_t *wev = sink->wev;
-    prte_list_item_t *item;
+    pmix_list_item_t *item;
     prte_iof_write_output_t *output;
     int num_written, total_written = 0;
+    PRTE_HIDE_UNUSED_PARAMS(_fd, event);
 
-    PRTE_ACQUIRE_OBJECT(sink);
+    PMIX_ACQUIRE_OBJECT(sink);
 
     PRTE_OUTPUT_VERBOSE((1, prte_iof_base_framework.framework_output,
                          "%s write:handler writing data to %d", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                          wev->fd));
 
-    while (NULL != (item = prte_list_remove_first(&wev->outputs))) {
+    while (NULL != (item = pmix_list_remove_first(&wev->outputs))) {
         output = (prte_iof_write_output_t *) item;
         if (0 == output->numbytes) {
             /* indicates we are to close this stream */
-            PRTE_RELEASE(sink);
+            PMIX_RELEASE(sink);
             return;
         }
         num_written = write(wev->fd, output->data, output->numbytes);
         if (num_written < 0) {
             if (EAGAIN == errno || EINTR == errno) {
                 /* push this item back on the front of the list */
-                prte_list_prepend(&wev->outputs, item);
+                pmix_list_prepend(&wev->outputs, item);
                 /* if the list is getting too large, abort */
-                if (prte_iof_base_output_limit < (int)prte_list_get_size(&wev->outputs)) {
+                if (prte_iof_base_output_limit < (int)pmix_list_get_size(&wev->outputs)) {
                     prte_output(0, "IO Forwarding is running too far behind - something is "
                                    "blocking us from writing");
                     PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
@@ -131,7 +137,7 @@ void prte_iof_base_write_handler(int _fd, short event, void *cbdata)
             /* otherwise, something bad happened so all we can do is abort
              * this attempt
              */
-            PRTE_RELEASE(output);
+            PMIX_RELEASE(output);
             goto ABORT;
         } else if (num_written < output->numbytes) {
             /* incomplete write - adjust data to avoid duplicate output */
@@ -139,9 +145,9 @@ void prte_iof_base_write_handler(int _fd, short event, void *cbdata)
             /* adjust the number of bytes remaining to be written */
             output->numbytes -= num_written;
             /* push this item back on the front of the list */
-            prte_list_prepend(&wev->outputs, item);
+            pmix_list_prepend(&wev->outputs, item);
             /* if the list is getting too large, abort */
-            if (prte_iof_base_output_limit < (int)prte_list_get_size(&wev->outputs)) {
+            if (prte_iof_base_output_limit < (int)pmix_list_get_size(&wev->outputs)) {
                 prte_output(0, "IO Forwarding is running too far behind - something is blocking us "
                                "from writing");
                 PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);
@@ -152,7 +158,7 @@ void prte_iof_base_write_handler(int _fd, short event, void *cbdata)
              */
             goto NEXT_CALL;
         }
-        PRTE_RELEASE(output);
+        PMIX_RELEASE(output);
 
         total_written += num_written;
         if (wev->always_writable && (PRTE_IOF_SINK_BLOCKSIZE <= total_written)) {
@@ -165,7 +171,7 @@ void prte_iof_base_write_handler(int _fd, short event, void *cbdata)
     }
 ABORT:
     wev->pending = false;
-    PRTE_POST_OBJECT(wev);
+    PMIX_POST_OBJECT(wev);
     return;
 NEXT_CALL:
     PRTE_IOF_SINK_ACTIVATE(wev);
