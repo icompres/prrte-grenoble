@@ -395,7 +395,8 @@ static void proc_errors(int fd, short args, void *cbdata)
         PMIX_RELEASE(caddy);
         return;
     }
-    pptr = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
+    pptr = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, proc->rank);
+    //pptr = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, proc->rank);
     if (NULL == pptr) {
         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
         goto cleanup;

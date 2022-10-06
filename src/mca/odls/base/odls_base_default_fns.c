@@ -479,18 +479,22 @@ int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_n
 
     /* pack the job struct */
     rc = prte_job_pack(buffer, jdata);
+
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
         return rc;
     }
 
+    /*
     if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* compute and pack the ppn */
+        // compute and pack the ppn 
         if (PRTE_SUCCESS != (rc = prte_util_generate_ppn(jdata, buffer))) {
             PRTE_ERROR_LOG(rc);
             return rc;
         }
     }
+    */
+
     /* assemble the node and proc map info */
     list = NULL;
     procs = NULL;
@@ -498,29 +502,30 @@ int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_n
     PMIX_INFO_CREATE(cd.info, cd.ninfo);
     for (i = 0; i < map->nodes->size; i++) {
         micro = NULL;
-        if (NULL != (node = (prte_node_t *) prte_pointer_array_get_item(map->nodes, i))) {
-            prte_argv_append_nosize(&list, node->name);
+        if (NULL != (node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, i))) {
+            pmix_argv_append_nosize(&list, node->name);
             /* assemble all the ranks for this job that are on this node */
             for (k = 0; k < node->procs->size; k++) {
-                if (NULL != (pptr = (prte_proc_t *) prte_pointer_array_get_item(node->procs, k))) {
+                if (NULL != (pptr = (prte_proc_t *) pmix_pointer_array_get_item(node->procs, k))) {
                     if (PMIX_CHECK_NSPACE(jdata->nspace, pptr->name.nspace)) {
-                        prte_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
+                        pmix_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
                     }
                 }
             }
             /* assemble the rank/node map */
             if (NULL != micro) {
-                tmp = prte_argv_join(micro, ',');
-                prte_argv_free(micro);
-                prte_argv_append_nosize(&procs, tmp);
+                tmp = pmix_argv_join(micro, ',');
+                pmix_argv_free(micro);
+                pmix_argv_append_nosize(&procs, tmp);
                 free(tmp);
             }
         }
     }
+
     /* let the PMIx server generate the nodemap regex */
     if (NULL != list) {
-        tmp = prte_argv_join(list, ',');
-        prte_argv_free(list);
+        tmp = pmix_argv_join(list, ',');
+        pmix_argv_free(list);
         list = NULL;
         if (PMIX_SUCCESS != (ret = PMIx_generate_regex(tmp, &regex))) {
             PMIX_ERROR_LOG(ret);
@@ -532,10 +537,12 @@ int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_n
         PMIX_INFO_LOAD(&cd.info[0], PMIX_NODE_MAP, regex, PMIX_REGEX);
         free(regex);
     }
+
+
     /* let the PMIx server generate the procmap regex */
     if (NULL != procs) {
-        tmp = prte_argv_join(procs, ';');
-        prte_argv_free(procs);
+        tmp = pmix_argv_join(procs, ';');
+        pmix_argv_free(procs);
         procs = NULL;
         if (PMIX_SUCCESS != (ret = PMIx_generate_ppn(tmp, &regex))) {
             PMIX_ERROR_LOG(ret);
@@ -667,9 +674,10 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
 
     /* ensure the map object is present */
     if (NULL == jdata->map) {
-        jdata->map = PRTE_NEW(prte_job_map_t);
+        jdata->map = PMIX_NEW(prte_job_map_t);
     }
 
+#if 0
     /* if the job is fully described, then mpirun will have computed
      * and sent us the complete array of procs in the prte_job_t, so we
      * don't need to do anything more here */
@@ -703,6 +711,7 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
             goto REPORT_ERROR;
         }
     }
+#endif
     /* unpack the byte object containing any application setup info - there
      * might not be any, so it isn't an error if we don't find things */
     cnt = 1;
@@ -773,15 +782,14 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
      * locate them */
     for (n = 0; n < jdata->procs->size; n++) {
         
-        if (NULL == (pptr = (prte_proc_t *) prte_pointer_array_get_item(jdata->procs, n))) {
+        if (NULL == (pptr = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, n))) {
             continue;
         }
         if (PRTE_PROC_STATE_UNDEF == pptr->state) {
             /* not ready for use yet */
             continue;
         }
-        
-        if (prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
+        if (!PRTE_PROC_IS_MASTER) {
             /* the parser will have already made the connection, but the fully described
              * case won't have done it, so connect the proc to its node here */
             prte_output_verbose(5, prte_odls_base_framework.framework_output,
@@ -795,28 +803,28 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
             }
             /* connect the proc to its node object */
             if (NULL
-                == (dmn = (prte_proc_t *) prte_pointer_array_get_item(daemons->procs,
+                == (dmn = (prte_proc_t *) pmix_pointer_array_get_item(daemons->procs,
                                                                       pptr->parent))) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 rc = PRTE_ERR_NOT_FOUND;
                 goto REPORT_ERROR;
             }
-            PRTE_RETAIN(dmn->node);
+            PMIX_RETAIN(dmn->node);
             pptr->node = dmn->node;
             /* add the node to the job map, if needed */
             if (!PRTE_FLAG_TEST(pptr->node, PRTE_NODE_FLAG_MAPPED)) {
-                PRTE_RETAIN(pptr->node);
-                prte_pointer_array_add(jdata->map->nodes, pptr->node);
+                PMIX_RETAIN(pptr->node);
+                pmix_pointer_array_add(jdata->map->nodes, pptr->node);
                 jdata->map->num_nodes++;
                 PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
             }
             /* add this proc to that node */
-            PRTE_RETAIN(pptr);
-            prte_pointer_array_add(pptr->node->procs, pptr);
+            PMIX_RETAIN(pptr);
+            pmix_pointer_array_add(pptr->node->procs, pptr);
             pptr->node->num_procs++;
             /* and connect it back to its job object, if not already done */
             if (NULL == pptr->job) {
-                PRTE_RETAIN(jdata);
+                PMIX_RETAIN(jdata);
                 pptr->job = jdata;
             }
         }
@@ -832,9 +840,9 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
                 /* keep tabs of the number of local procs */
                 jdata->num_local_procs++;
                 /* add this proc to our child list */
-                PRTE_RETAIN(pptr);
+                PMIX_RETAIN(pptr);
                 PRTE_FLAG_SET(pptr, PRTE_PROC_FLAG_LOCAL);
-                prte_pointer_array_add(prte_local_children, pptr);
+                pmix_pointer_array_add(prte_local_children, pptr);
             }
 
             /* if the job is in restart mode, the child must not barrier when launched */
@@ -843,28 +851,21 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
                                    PMIX_BOOL);
             }
             /* mark that this app_context is being used on this node */
-            app = (prte_app_context_t *) prte_pointer_array_get_item(jdata->apps, pptr->app_idx);
+            app = (prte_app_context_t *) pmix_pointer_array_get_item(jdata->apps, pptr->app_idx);
             PRTE_FLAG_SET(app, PRTE_APP_FLAG_USED_ON_NODE);
         }
     }
 
-    if (prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* reset the mapped flags */
-        for (n = 0; n < jdata->map->nodes->size; n++) {
-            if (NULL
-                != (node = (prte_node_t *) prte_pointer_array_get_item(jdata->map->nodes, n))) {
-                PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
-            }
+    
+    /* reset the mapped flags */
+    for (n = 0; n < jdata->map->nodes->size; n++) {
+        if (NULL
+            != (node = (prte_node_t *) pmix_pointer_array_get_item(jdata->map->nodes, n))) {
+            PRTE_FLAG_UNSET(node, PRTE_NODE_FLAG_MAPPED);
         }
     }
+    
 
-    if (!prte_get_attribute(&jdata->attributes, PRTE_JOB_FULLY_DESCRIBED, NULL, PMIX_BOOL)) {
-        /* compute and save bindings of local children */
-        if (PRTE_SUCCESS != (rc = prte_rmaps_base_compute_bindings(jdata))) {
-            PRTE_ERROR_LOG(rc);
-            goto REPORT_ERROR;
-        }
-    }
     bool retain_nlocal = true;
     prte_set_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, PRTE_ATTR_GLOBAL, &retain_nlocal, PMIX_BOOL);
 
@@ -1213,21 +1214,23 @@ next:
             size_t pp;
             prte_proc_t *node_proc;
             bool found = false;
+            
             for(pp = 0; pp < pptr->node->procs->size; pp++){
-                if(NULL == (node_proc = prte_pointer_array_get_item(pptr->node->procs, pp))){
+                if(NULL == (node_proc = pmix_pointer_array_get_item(pptr->node->procs, pp))){
                     continue;
                 }
+
                 
                 if(PMIX_CHECK_PROCID(&node_proc->name, &pptr->name)){
                     found = true;
 
-                    //prte_pointer_array_set_item(pptr->node->procs, pp, NULL);
-                    //PRTE_RELEASE(node_proc);
-                    //prte_pointer_array_set_item(pptr->node->procs, pp, pptr);
+                    //pmix_pointer_array_set_item(pptr->node->procs, pp, NULL);
+                    //PMIX_RELEASE(node_proc);
+                    //pmix_pointer_array_set_item(pptr->node->procs, pp, pptr);
                 }
             }
             if(!found){
-                prte_pointer_array_add(pptr->node->procs, pptr);
+                pmix_pointer_array_add(pptr->node->procs, pptr);
                 pptr->node->num_procs++;
             }
 

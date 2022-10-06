@@ -620,7 +620,7 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
     size_t pr;
     bool found = false;
     for(pr = 0 ; pr < jdata->procs->size; pr++){
-        if(NULL == (pdata = prte_pointer_array_get_item(jdata->procs, pr))){
+        if(NULL == (pdata = pmix_pointer_array_get_item(jdata->procs, pr))){
             continue;
         }
         if(pdata->name.rank == proc->rank){
@@ -733,9 +733,9 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
 
         size_t p;
         prte_res_change_t *res_change;
-        PRTE_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+        PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
             pmix_server_pset_t *pset;
-            PRTE_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+            PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
                 if(0 == strcmp(res_change->rc_pset, pset->name)){
                     
                     for(p = 0; p < pset->num_members; p++){
@@ -774,7 +774,8 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
                         return;
                     }
                     //printf("sending RES_CHANGE_FINALIZE to %s\n", PRTE_NAME_PRINT(&_target));
-                    prte_rml.send_buffer_nb(&_target, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+                    //prte_rml.send_buffer_nb(&_target, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+                    PRTE_RML_SEND(ret, _target.rank, buf, PRTE_RML_TAG_MALLEABILITY);
                 }
                 free(rc_pset);
             }

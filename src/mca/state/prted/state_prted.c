@@ -378,7 +378,7 @@ static void track_procs(int fd, short argc, void *cbdata)
     size_t pr;
     bool found = false;
     for(pr = 0 ; pr < jdata->procs->size; pr++){
-        if(NULL == (pdata = prte_pointer_array_get_item(jdata->procs, pr))){
+        if(NULL == (pdata = pmix_pointer_array_get_item(jdata->procs, pr))){
             continue;
         }
         if(pdata->name.rank == proc->rank){

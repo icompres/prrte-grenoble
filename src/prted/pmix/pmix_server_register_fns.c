@@ -579,6 +579,17 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
     }
     PMIX_LIST_DESTRUCT(&local_procs);
 
+    /* If this is an update related to resource subtraction retain the PMIx sever's own nlocal accounting
+     * Otherwise, this will eventually lead to nlocal = 0 which would trigger a all clients terminated event
+     * TODO: Find a better way to do this
+     */
+    int nlocalprocs = jdata->num_local_procs;
+    if (prte_get_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, NULL, PMIX_BOOL)) {
+        nlocalprocs = INT_MIN;
+        prte_remove_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL);
+    }
+    //printf("Node %s: nlocalprocs = %d\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), nlocalprocs);
+
     /* register it */
     PMIX_INFO_LIST_CONVERT(ret, info, &darray);
     pinfo = (pmix_info_t*)darray.array;

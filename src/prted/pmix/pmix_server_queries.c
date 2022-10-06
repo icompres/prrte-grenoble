@@ -149,11 +149,11 @@ static void _query(int sd, short args, void *cbdata)
                 } else if (PMIX_CHECK_KEY(&q->qualifiers[n], PMIX_NODEID)) {
                     PMIX_VALUE_GET_NUMBER(rc, &q->qualifiers[n].value, nodeid, uint32_t);
                 }else if(PMIX_CHECK_KEY(&q->qualifiers[n], PMIX_PSET_NAME)){
-                    kv = PRTE_NEW(prte_info_item_t);
+                    kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_PSET_NAME, q->qualifiers[n].value.data.string, PMIX_STRING);
-                    prte_list_append(&results, &kv->super);
+                    pmix_list_append(&results, &kv->super);
                     
-                    //printf("added qualifier --> size = %d\n", prte_list_get_size(&results));
+                    //printf("added qualifier --> size = %d\n", pmix_list_get_size(&results));
                 }
             }
         }
@@ -494,7 +494,7 @@ static void _query(int sd, short args, void *cbdata)
 
                 for(k=0; k < q->nqual; k++){
                     if(0 == strcmp(q->qualifiers[k].key, PMIX_PSET_NAME) ){
-                        PRTE_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+                        PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
                             
                             if(0 == strcmp(pset->name, q->qualifiers[k].value.data.string)){
                                 flag=1;
@@ -514,43 +514,43 @@ static void _query(int sd, short args, void *cbdata)
                 if(flag==0){
                     continue;
                 }else{
-                    if(prte_list_get_size(&results) > 0){
-                        prte_info_item_t *qual_rm = prte_list_remove_last(&results);
-                        PRTE_RELEASE(qual_rm);
+                    if(pmix_list_get_size(&results) > 0){
+                        prte_info_item_t *qual_rm = pmix_list_remove_last(&results);
+                        PMIX_RELEASE(qual_rm);
                     }
                     
-                    kv = PRTE_NEW(prte_info_item_t);
+                    kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSET_MEMBERSHIP, (void**)&data, PMIX_DATA_ARRAY);
                     PMIX_DATA_ARRAY_DESTRUCT(&data);
-                    prte_list_append(&results, &kv->super);
+                    pmix_list_append(&results, &kv->super);
                 }
             }
             else if (0 == strcmp(q->keys[n], "PMIX_RC_TYPE")) {
-                if(0 == prte_list_get_size(&prte_pmix_server_globals.res_changes)){
+                if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
                     continue;
                 }
-                prte_res_change_t *res_change = prte_list_get_first(&prte_pmix_server_globals.res_changes);
+                prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
                 if(!res_change->queryable){
                     continue;
                 }
                 /* For now default to the first res change in the list */
-                kv = PRTE_NEW(prte_info_item_t);
+                kv = PMIX_NEW(prte_info_item_t);
                 PMIX_INFO_LOAD(&kv->info, "PMIX_RC_TYPE", &res_change->rc_type, PMIX_UINT8);
-                prte_list_append(&results, &kv->super);
+                pmix_list_append(&results, &kv->super);
             
             } else if (0 == strcmp(q->keys[n], "PMIX_RC_PSET")) {
-                if(0 == prte_list_get_size(&prte_pmix_server_globals.res_changes)){
+                if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
                     continue;
                 }
                 
-                prte_res_change_t *res_change = prte_list_get_first(&prte_pmix_server_globals.res_changes);
+                prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
                 if(!res_change->queryable){
                     continue;
                 }
                 /* For now default to the first res change in the list */
-                kv = PRTE_NEW(prte_info_item_t);
+                kv = PMIX_NEW(prte_info_item_t);
                 PMIX_INFO_LOAD(&kv->info, "PMIX_RC_PSET", res_change->rc_pset, PMIX_STRING);
-                prte_list_append(&results, &kv->super);
+                pmix_list_append(&results, &kv->super);
   
             
             } else if (0 == strcmp(q->keys[n], PMIX_JOB_SIZE)) {

@@ -82,6 +82,8 @@ PRTE_EXPORT int prte_odls_base_default_get_add_procs_data(pmix_data_buffer_t *da
 PRTE_EXPORT int prte_odls_base_default_construct_child_list(pmix_data_buffer_t *data,
                                                             pmix_nspace_t *job);
 
+PRTE_EXPORT int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *data);
+
 PRTE_EXPORT void prte_odls_base_spawn_proc(int fd, short sd, void *cbdata);
 
 /* define a function that will fork a local proc */

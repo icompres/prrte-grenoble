@@ -73,6 +73,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
             ++count;
         }
     }
+
     rc = PMIx_Data_pack(NULL, bkt, (void *) &count, 1, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);
@@ -93,6 +94,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
             }
         }
     }
+
     /* check for job info attribute */
     cache = NULL;
     if (prte_get_attribute(&job->attributes, PRTE_JOB_INFO_CACHE, (void **) &cache, PMIX_POINTER)
@@ -161,6 +163,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
         }
     }
 
+
     /* pack the number of procs and offset */
     rc = PMIx_Data_pack(NULL, bkt, (void *) &job->num_procs, 1, PMIX_PROC_RANK);
     if (PMIX_SUCCESS != rc) {
@@ -172,6 +175,7 @@ int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job)
         PMIX_ERROR_LOG(rc);
         return prte_pmix_convert_status(rc);
     }
+
 
     if (0 < job->num_procs) {
         for (j = 0; j < job->procs->size; j++) {
@@ -517,6 +521,8 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
         return prte_pmix_convert_status(rc);
     }
 
+
+
     /* pack attributes */
     count = 0;
     PMIX_LIST_FOREACH(kv, &app->attributes, prte_attribute_t)
@@ -525,6 +531,9 @@ int prte_app_pack(pmix_data_buffer_t *bkt, prte_app_context_t *app)
             ++count;
         }
     }
+
+
+
     rc = PMIx_Data_pack(NULL, bkt, &count, 1, PMIX_INT32);
     if (PMIX_SUCCESS != rc) {
         PMIX_ERROR_LOG(rc);

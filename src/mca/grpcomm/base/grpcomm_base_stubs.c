@@ -432,13 +432,34 @@ static int create_dmns(prte_grpcomm_signature_t *sig, pmix_rank_t **dmns, size_t
                                  "%s sign: GETTING PROC OBJECT FOR %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME),
                                  PRTE_NAME_PRINT(&sig->signature[n])));
-            if (NULL
-                == (proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs,
-                                                                       sig->signature[n].rank))) {
+            
+            /* Account for non-continous rank space */
+            size_t pr;
+            found = false;
+            for(pr = 0 ; pr < jdata->procs->size; pr++){
+                if(NULL == (proc = pmix_pointer_array_get_item(jdata->procs, pr))){
+                    continue;
+                }
+                if(proc->name.rank == sig->signature[n].rank){
+                    found = true;
+                    break;
+                }
+            }
+            if(!found){
+                proc = NULL;
+            }
+            if (NULL == proc) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 rc = PRTE_ERR_NOT_FOUND;
                 goto done;
             }
+            //if (NULL
+            //    == (proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs,
+            //                                                           sig->signature[n].rank))) {
+            //    PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
+            //    rc = PRTE_ERR_NOT_FOUND;
+            //    goto done;
+            //}
             if (NULL == proc->node || NULL == proc->node->daemon) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 rc = PRTE_ERR_NOT_FOUND;

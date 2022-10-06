@@ -60,7 +60,8 @@ headers = \
         session_dir.h \
         stacktrace.h \
         sys_limits.h \
-        uri.h
+        uri.h \
+        bench_timings.h
 
 libprrteutil_la_SOURCES = \
         $(headers) \
@@ -81,7 +82,8 @@ libprrteutil_la_SOURCES = \
         session_dir.c \
         stacktrace.c \
         sys_limits.c \
-        uri.c
+        uri.c \
+        bench_timings.c
 
 libprrteutil_la_LIBADD = \
         hostfile/libprrteutilhostfile.la

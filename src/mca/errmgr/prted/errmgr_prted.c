@@ -459,7 +459,7 @@ static void proc_errors(int fd, short args, void *cbdata)
     }
 
     /* EDIT: Account for rank dynamicity */
-    if (NULL == (child = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, proc->rank, proc->rank))) {
+    if (NULL == (child = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, proc->rank))) {
         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
         /* FIXME: Prevent forced exit. Is this still needed? */
         //PRTE_ACTIVATE_JOB_STATE(NULL, PRTE_JOB_STATE_FORCED_EXIT);

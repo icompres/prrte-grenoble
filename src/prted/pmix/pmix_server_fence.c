@@ -291,7 +291,8 @@ static void dmodex_req(int sd, short args, void *cbdata)
     }
 
     /* if they are asking about a specific proc, then fetch it */
-    proct = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, req->tproc.rank);
+    //proct = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, req->tproc.rank);
+    proct = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, req->tproc.rank);
     if (NULL == proct) {
         /* if we find the job, but not the process, then that is an error */
         PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);

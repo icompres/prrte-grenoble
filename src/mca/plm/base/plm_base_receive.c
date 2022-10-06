@@ -296,7 +296,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
         if (NULL != parent && !PRTE_FLAG_TEST(parent, PRTE_JOB_FLAG_TOOL)) {
             if (NULL == parent->bookmark) {
                 /* find the sender's node in the job map */
-                proc = (prte_proc_t *) prte_get_proc_object_by_rank(parent->procs, sender->rank);
+                proc = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, sender->rank);
                 if (NULL != proc) {
                     /* set the bookmark so the child starts from that place - this means
                      * that the first child process could be co-located with the proc
@@ -377,7 +377,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             /* get the job object */
             jdata = prte_get_job_data_object(job);
             count = 1;
-            running = false;
+            bool running = false;
             rc = PMIx_Data_unpack(NULL, buffer, &vpid, &count, PMIX_PROC_RANK);
             while (PMIX_SUCCESS == rc) {
                 if (PMIX_RANK_INVALID == vpid) {
@@ -428,7 +428,7 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                     size_t pr;
                     bool found = false;
                     for(pr = 0 ; pr < jdata->procs->size; pr++){
-                        if(NULL == (proc = prte_pointer_array_get_item(jdata->procs, pr))){
+                        if(NULL == (proc = pmix_pointer_array_get_item(jdata->procs, pr))){
                             continue;
                         }
                         if(proc->name.rank == vpid){
@@ -515,7 +515,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                      PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid));
 
                 /* get the proc data object */
-                proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+                //proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+                proc = (prte_proc_t *) prte_get_proc_object_by_rank(jdata, vpid);
                 if (NULL == proc) {
                     PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                     PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
@@ -578,7 +579,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                                  "%s plm:base:receive got registered for vpid %u",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), vpid));
-            proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+            //proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+            proc = prte_get_proc_object_by_rank(jdata, vpid);
             if (NULL == proc) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);
@@ -618,7 +620,8 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
             PRTE_OUTPUT_VERBOSE((5, prte_plm_base_framework.framework_output,
                                  "%s plm:base:receive got local launch complete for vpid %s",
                                  PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_VPID_PRINT(vpid)));
-            proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+            //proc = (prte_proc_t *) pmix_pointer_array_get_item(jdata->procs, vpid);
+            proc = (prte_proc_t*) prte_get_proc_object_by_rank(jdata, vpid);
             if (NULL == proc) {
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 PRTE_ACTIVATE_JOB_STATE(jdata, PRTE_JOB_STATE_FORCED_EXIT);

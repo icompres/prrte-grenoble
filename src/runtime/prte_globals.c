@@ -261,6 +261,78 @@ int prte_set_job_data_object(prte_job_t *jdata)
     return PRTE_SUCCESS;
 }
 
+int prte_set_or_replace_job_data_object(prte_job_t *jdata)
+{
+    prte_job_t *jptr;
+    int i, save = -1, exists = -1;
+
+    /* if the job data wasn't setup, we cannot set the data */
+    if (NULL == prte_job_data) {
+        return PRTE_ERROR;
+    }
+    /* if the nspace is invalid, then that's an error */
+    if (PMIX_NSPACE_INVALID(jdata->nspace)) {
+        return PRTE_ERROR;
+    }
+    /* verify that we don't already have this object */
+    for (i = 0; i < prte_job_data->size; i++) {
+        if (NULL == (jptr = (prte_job_t *) pmix_pointer_array_get_item(prte_job_data, i))) {
+            if (0 > save) {
+                save = i;
+            }
+            continue;
+        }
+        if (PMIX_CHECK_NSPACE(jptr->nspace, jdata->nspace)) {
+            
+            exists = i;
+            break;
+        }
+    }
+
+    if(-1 < exists){
+        jdata->index = exists;
+        jptr = (prte_job_t *) pmix_pointer_array_get_item(prte_job_data, exists);
+        jptr->index = -1;
+        pmix_pointer_array_set_item(prte_job_data, exists, jdata);
+        PMIX_RELEASE(jptr);
+        jptr = (prte_job_t *) pmix_pointer_array_get_item(prte_job_data, exists);
+    }
+    else if (-1 == save) {
+        jdata->index = pmix_pointer_array_add(prte_job_data, jdata);
+    } else {
+        jdata->index = save;
+        pmix_pointer_array_set_item(prte_job_data, save, jdata);
+    }
+    if (0 > jdata->index) {
+        return PRTE_ERROR;
+    }
+    return PRTE_SUCCESS;
+}
+
+prte_proc_t *prte_get_proc_object_by_rank(const prte_job_t *jdata, pmix_rank_t rank)
+{
+    prte_proc_t *proct;
+    size_t pr;
+    bool found = false;
+    if (NULL == jdata) {
+        return NULL;
+    }
+    /* Do a greedy search */
+    for(pr = 0 ; pr < jdata->procs->size; pr++){
+        if(NULL == (proct = pmix_pointer_array_get_item(jdata->procs, pr))){
+            continue;
+        }
+        if(proct->name.rank == rank){
+            found = true;
+            break;
+        }
+    }
+    if(!found){
+        proct = NULL;
+    }
+    return proct;
+}
+
 prte_proc_t *prte_get_proc_object(const pmix_proc_t *proc)
 {
     prte_job_t *jdata;

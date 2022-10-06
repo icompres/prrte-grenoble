@@ -371,7 +371,7 @@ typedef struct {
 PMIX_CLASS_DECLARATION(pmix_server_pset_t);
 
 typedef struct {
-    prte_list_item_t super;
+    pmix_list_item_t super;
     char rc_pset[PMIX_MAX_KEYLEN];
     pmix_res_change_type_t rc_type;
     size_t nprocs;
@@ -381,7 +381,7 @@ typedef struct {
     size_t nglobalprocs_terminated;
     bool queryable;
 } prte_res_change_t;
-PRTE_CLASS_DECLARATION(prte_res_change_t);
+PMIX_CLASS_DECLARATION(prte_res_change_t);
 
 
 typedef struct {
@@ -403,7 +403,7 @@ typedef struct {
     pmix_device_type_t generate_dist;
     pmix_list_t tools;
     pmix_list_t psets;
-    prte_list_t res_changes;
+    pmix_list_t res_changes;
 } pmix_server_globals_t;
 
 extern pmix_server_globals_t prte_pmix_server_globals;

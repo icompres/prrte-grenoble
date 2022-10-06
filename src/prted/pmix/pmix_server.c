@@ -114,7 +114,7 @@ static pmix_server_module_t pmix_server = {
     .job_control = pmix_server_job_ctrl_fn,
     .iof_pull = pmix_server_iof_pull_fn,
     .push_stdin = pmix_server_stdin_fn,
-    .group = pmix_server_group_fn
+    .group = pmix_server_group_fn,
     .pset_operation = pset_operation_fn
 };
 
@@ -532,11 +532,11 @@ void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
         cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
         PMIX_ERROR_LOG(ret);
         return;
-
+    }
 
     /* If it is a resource substrcation: Do not delete the resource change as we need to wait for clients to finalize */ 
     prte_res_change_t *res_change;
-    PRTE_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+    PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
         if(0 == strcmp(res_change->rc_pset, rc_pset)){
             if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
                 break;
@@ -569,8 +569,8 @@ void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
         return;
     }
     
-    prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
-    
+    //prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+    PRTE_RML_SEND(ret, PRTE_PROC_MY_NAME->rank, buf, PRTE_RML_TAG_MALLEABILITY);
     
     cbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, cbdata);
 
@@ -657,7 +657,7 @@ int pmix_server_init(void)
     /* setup the server's state variables */
     PMIX_CONSTRUCT(&prte_pmix_server_globals.reqs, pmix_hotel_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.psets, pmix_list_t);
-    PRTE_CONSTRUCT(&prte_pmix_server_globals.res_changes, prte_list_t);
+    PMIX_CONSTRUCT(&prte_pmix_server_globals.res_changes, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.tools, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.local_reqs, pmix_pointer_array_t);
     pmix_pointer_array_init(&prte_pmix_server_globals.local_reqs, 128, INT_MAX, 2);
@@ -1028,7 +1028,7 @@ void pmix_server_finalize(void)
     PMIX_DESTRUCT(&prte_pmix_server_globals.local_reqs);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.notifications);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.psets);
-    PRTE_LIST_DESTRUCT(&prte_pmix_server_globals.res_changes);
+    PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.res_changes);
 
     /* shutdown the local server */
     prte_pmix_server_globals.initialized = false;
@@ -1722,7 +1722,7 @@ static void psdes(pmix_server_pset_t *p)
     }
 }
 PMIX_CLASS_INSTANCE(pmix_server_pset_t, pmix_list_item_t, pscon, psdes);
-PMIX_CLASS_INSTANCE(prte_res_change_t, prte_list_item_t, NULL, NULL);
+PMIX_CLASS_INSTANCE(prte_res_change_t, pmix_list_item_t, NULL, NULL);
 
 
 static void tlcon(prte_pmix_tool_t *p)

@@ -57,6 +57,7 @@
 #include "src/util/pmix_cmd_line.h"
 #include "src/util/name_fns.h"
 #include "src/util/proc_info.h"
+#include "src/util/bench_timings.h"
 
 BEGIN_C_DECLS
 
@@ -455,6 +456,12 @@ PRTE_EXPORT prte_job_t *prte_get_job_data_object(const pmix_nspace_t job);
  */
 PRTE_EXPORT int prte_set_job_data_object(prte_job_t *jdata);
 
+/**
+ * Set or replace a job data object - returns an error if it cannot add the object
+ * to the array
+ */
+PRTE_EXPORT int prte_set_or_replace_job_data_object(prte_job_t *jdata);
+
 /** Pack/unpack a job object */
 PRTE_EXPORT int prte_job_pack(pmix_data_buffer_t *bkt, prte_job_t *job);
 PRTE_EXPORT int prte_job_unpack(pmix_data_buffer_t *bkt, prte_job_t **job);
@@ -488,6 +495,11 @@ PRTE_EXPORT void prte_node_print(char **output, prte_job_t *jdata, prte_node_t *
  * Get a proc data object
  */
 PRTE_EXPORT prte_proc_t *prte_get_proc_object(const pmix_proc_t *proc);
+
+/**
+ * Get a proc data object by rank
+ */
+PMIX_EXPORT prte_proc_t *prte_get_proc_object_by_rank(const prte_job_t *jdata, pmix_rank_t rank);
 
 /**
  * Get the daemon vpid hosting a given proc

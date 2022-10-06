@@ -105,6 +105,9 @@ typedef uint8_t prte_daemon_cmd_flag_t;
 
 #define PRTE_DYNRES_LOCAL_PROCS_FINALIZED (prte_daemon_cmd_flag_t) 48
 
+/* add procs for the DVM */
+#define PRTE_DAEMON_DVM_SUB_PROCS (prte_daemon_cmd_flag_t) 49
+
 
 
 /*
