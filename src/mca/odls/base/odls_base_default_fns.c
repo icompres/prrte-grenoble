@@ -579,6 +579,7 @@ int prte_odls_base_default_get_sub_procs_data(pmix_data_buffer_t *buffer, pmix_n
     rc = PRTE_SUCCESS;
     cd.jdata = jdata;
     PRTE_PMIX_CONSTRUCT_LOCK(&cd.lock);
+
     if (PMIX_SUCCESS
         != (ret = PMIx_server_setup_application(jdata->nspace, cd.info, cd.ninfo, setup_sub_cbfunc,
                                                 &cd))) {
@@ -601,8 +602,8 @@ static void ls_cbunc(pmix_status_t status, void *cbdata)
 }
 
 /* registers the provided job data with the local pmix server,
- * to allow PMIx Clients to access the new jobdata.
- * However, this does neither change the damon's job data 
+ * to allow PMIx Clients to access the new jobdata (resource subtraction).
+ * However, this does neither change the daemon's prte job data 
  * nor internal pmix server accounting of local clients
  */
 int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
@@ -676,6 +677,7 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
     if (NULL == jdata->map) {
         jdata->map = PMIX_NEW(prte_job_map_t);
     }
+    
 
 #if 0
     /* if the job is fully described, then mpirun will have computed
@@ -789,7 +791,8 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
             /* not ready for use yet */
             continue;
         }
-        if (!PRTE_PROC_IS_MASTER) {
+
+        if (!PRTE_PROC_IS_MASTER || true) {
             /* the parser will have already made the connection, but the fully described
              * case won't have done it, so connect the proc to its node here */
             prte_output_verbose(5, prte_odls_base_framework.framework_output,
@@ -809,25 +812,81 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
                 rc = PRTE_ERR_NOT_FOUND;
                 goto REPORT_ERROR;
             }
-            PMIX_RETAIN(dmn->node);
-            pptr->node = dmn->node;
-            /* add the node to the job map, if needed */
-            if (!PRTE_FLAG_TEST(pptr->node, PRTE_NODE_FLAG_MAPPED)) {
-                PMIX_RETAIN(pptr->node);
-                pmix_pointer_array_add(jdata->map->nodes, pptr->node);
-                jdata->map->num_nodes++;
-                PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
+            //PMIX_RETAIN(dmn->node);
+            //pptr->node = dmn->node;
+            //printf("add node %s?\n", pptr->node->name);
+
+            /* Check if this node is already in the job map */
+            int i, found = 0;
+            prte_node_t *node_ptr;
+            if(NULL == jdata->map->nodes){
+                printf("nodes in map == NULL\n");
+                exit(1);
             }
-            /* add this proc to that node */
+            
+            for(i = 0; i < jdata->map->nodes->size; i++){
+                if(NULL == (node_ptr = pmix_pointer_array_get_item(jdata->map->nodes, i))){
+                    continue;
+                }
+                if(0 == strcmp(node_ptr->name, dmn->node->name)){
+                    found = 1;
+                    break;
+                }
+            }
+            /* If it is not yet in the job map create a copy and insert into job map */
+            if(!found){
+            
+                prte_node_copy(&node_ptr, dmn->node);
+                node_ptr->slots_inuse = 0;
+                node_ptr->num_procs = 0;
+                node_ptr->daemon = dmn;
+                 /* copy the attribute list */
+                PMIX_CONSTRUCT(&node_ptr->attributes, pmix_list_t);
+                prte_attribute_t *attr;
+                PMIX_LIST_FOREACH(attr, &dmn->node->attributes, prte_attribute_t){
+                    prte_add_attribute(&node_ptr->attributes, attr->key, attr->local, &attr->data.data, attr->data.type); 
+                }
+                node_ptr->procs = PMIX_NEW(pmix_pointer_array_t);
+
+                pmix_pointer_array_add(jdata->map->nodes, node_ptr);
+                
+            }
+            pptr->node = node_ptr;
             PMIX_RETAIN(pptr);
             pmix_pointer_array_add(pptr->node->procs, pptr);
             pptr->node->num_procs++;
+            pptr->node->slots_inuse++;
+            /* and connect it back to its job object, if not already done */
+            if (NULL == pptr->job) {
+                PMIX_RETAIN(jdata);
+                pptr->job = jdata;
+            }
+            /*
+             * - check if node name in map->nodes
+             * - if not do copy and add
+             * - add proc to node->procs
+             * - set proc->node to proc
+             * - 
+             */
+            /* add the node to the job map, if needed */
+            //if (!PRTE_FLAG_TEST(pptr->node, PRTE_NODE_FLAG_MAPPED)) {
+            //
+            //    PMIX_RETAIN(pptr->node);
+            //    pmix_pointer_array_add(jdata->map->nodes, pptr->node);
+            //    jdata->map->num_nodes++;
+            //    PRTE_FLAG_SET(pptr->node, PRTE_NODE_FLAG_MAPPED);
+            //}
+            /* add this proc to that node */
+            //PMIX_RETAIN(pptr);
+            //pmix_pointer_array_add(pptr->node->procs, pptr);
+            //pptr->node->num_procs++;
             /* and connect it back to its job object, if not already done */
             if (NULL == pptr->job) {
                 PMIX_RETAIN(jdata);
                 pptr->job = jdata;
             }
         }
+
         /* see if it belongs to us */
         if (pptr->parent == PRTE_PROC_MY_NAME->rank) {
             /* is this child on our current list of children */
@@ -868,6 +927,11 @@ int prte_odls_base_default_update_pmix_server_data(pmix_data_buffer_t *buffer)
 
     bool retain_nlocal = true;
     prte_set_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, PRTE_ATTR_GLOBAL, &retain_nlocal, PMIX_BOOL);
+    
+    //char *jdata_string;
+    //prte_job_print(&jdata_string, jdata);
+    //printf("%s\n", jdata_string);
+    //free(jdata_string);
 
     /* register this job with the PMIx server - need to wait until after we
      * have computed the #local_procs before calling the function */

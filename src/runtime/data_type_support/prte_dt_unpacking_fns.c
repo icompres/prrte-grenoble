@@ -246,6 +246,10 @@ int prte_job_unpack(pmix_data_buffer_t *bkt, prte_job_t **job)
         }
     }
 
+    if(NULL != jptr->map->nodes->addr[0]){
+        prte_node_t *node_ptr = (prte_node_t *) jptr->map->nodes->addr[0];
+    }
+
     /* unpack the bookmark */
     n = 1;
     rc = PMIx_Data_unpack(NULL, bkt, &bookmark, &n, PMIX_INT32);

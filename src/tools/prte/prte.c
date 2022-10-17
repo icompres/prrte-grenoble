@@ -1405,7 +1405,6 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
         if(NULL == (proc = pmix_pointer_array_get_item(job_data->procs, n))){
             continue;
         }
-        printf("PRRTE: proc->rank %lu vs. proc->name.rank: %lu\n", proc->rank, proc->name.rank);
         proc->rank = proc->name.rank;
         if(proc->rank > highest_rank){
             highest_rank = proc->rank;
@@ -1414,7 +1413,6 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
     if(highest_rank_global > highest_rank){
         highest_rank = highest_rank_global;
     }
-    printf("PRRTE: highest rank: %lu\n", (unsigned long)highest_rank);
 
 
     /* create the delta pset starting at highest rank 
@@ -1427,7 +1425,6 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
         delta_procs[n] = PMIX_NEW(prte_proc_t);
         PMIX_LOAD_NSPACE(delta_procs[n]->name.nspace, spawnednspace);
         delta_procs[n]->name.rank = delta_procs[n]->rank = delta_procs[n]->app_rank =  highest_rank + offset;
-        printf("Loaded rank: %lu\n", delta_procs[n]->rank);
         delta_procs[n]->app_idx = 0;
         delta_procs[n]->state = PRTE_PROC_STATE_INIT;
         ++offset;
@@ -1445,7 +1442,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
             if(NULL == (node = job_nodes[node_index])){
                 continue;
             }
-
+            printf("node slots: %d\n", node->slots);
             /* Get the daemon of this node to set the parent of the proc*/
             prte_proc_t *daemon_proc = NULL;
             pmix_rank_t parent_vpid = PMIX_RANK_INVALID;
@@ -1538,7 +1535,6 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
     prte_app_context_t *app = job_data->apps->addr[0];
     for(n = 0; n < rc_nprocs; n++){
         pmix_pointer_array_add(job_data->procs, delta_procs[n]);
-        printf("Added proc to job in prte.c: %s\n", PRTE_NAME_PRINT(&delta_procs[n]->name));
         PMIX_RETAIN(delta_procs[n]);
         pmix_pointer_array_add(&app->procs, delta_procs[n]);
         job_data->num_procs++;
@@ -1551,47 +1547,48 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
     highest_rank_global = highest_rank + rc_nprocs;
 }
 
-static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data, size_t rc_nprocs, prte_proc_t ***_delta_procs){
+static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size_t rc_nprocs, prte_proc_t ***_delta_procs){
     
     size_t n, i, rm_nodes = 0;
+    int node_index;
     prte_attribute_t *attr;
 
-    prte_job_t *job_data_cpy = prte_get_job_data_object(job);
+    prte_job_t *job_data_orig = prte_get_job_data_object(job);
     
 
-    PMIX_RELEASE(job_data->apps);
-    PMIX_RELEASE(job_data->procs);
-    //PRTE_DESTRUCT(&job_data->attributes);
+    PMIX_RELEASE(job_data_cpy->apps);
+    PMIX_RELEASE(job_data_cpy->procs);
+    //PRTE_DESTRUCT(&job_data_cpy->attributes);
     /* create a copy of our job data object 
      * We need to use a copy as we do not want to change our stored job data,
      * instead we want to send an adjusted job data object only to update the pmix sever's job data
      */
-    memcpy(job_data, job_data_cpy, sizeof(prte_job_t));
+    memcpy(job_data_cpy, job_data_orig, sizeof(prte_job_t));
 
     /*TODO list foreach */
     /* copy the attributes list */
-    memset(&job_data->attributes, 0, sizeof(pmix_list_t));
-    PMIX_CONSTRUCT(&job_data->attributes, pmix_list_t);
+    memset(&job_data_cpy->attributes, 0, sizeof(pmix_list_t));
+    PMIX_CONSTRUCT(&job_data_cpy->attributes, pmix_list_t);
 
     /* set these attributes, just in case they aren't set yet */
     bool fully_described = true;
-    //prte_set_attribute(&job_data->attributes, PRTE_JOB_FULLY_DESCRIBED, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
-    prte_set_attribute(&job_data->attributes, PRTE_JOB_FIXED_DVM, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
-    prte_set_attribute(&job_data->attributes, PRTE_JOB_LAUNCH_PROXY, PRTE_ATTR_GLOBAL, &prte_process_info.myproc, PMIX_PROC);
+    //prte_set_attribute(&job_data_cpy->attributes, PRTE_JOB_FULLY_DESCRIBED, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
+    prte_set_attribute(&job_data_cpy->attributes, PRTE_JOB_FIXED_DVM, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
+    prte_set_attribute(&job_data_cpy->attributes, PRTE_JOB_LAUNCH_PROXY, PRTE_ATTR_GLOBAL, &prte_process_info.myproc, PMIX_PROC);
 
-    //size_t list_length = job_data_cpy->attributes.prte_list_length;
+    //size_t list_length = job_data_cpy_orig->attributes.prte_list_length;
     //int ctr=0;
-    //PMIX_LIST_FOREACH(attr, &job_data_cpy->attributes, prte_attribute_t){
+    //PMIX_LIST_FOREACH(attr, &job_data_cpy_orig->attributes, prte_attribute_t){
     //        prte_add_attribute(&new_attributes_list, attr->key, attr->local, &attr->data.data, attr->data.type);
     //        printf("prte attribute: %d\n", attr->key);
     //}
 
 
     /* copy app contexts (as we adjust the num procs) */
-    job_data->apps = PMIX_NEW(pmix_pointer_array_t);
-    pmix_pointer_array_init(job_data->apps, job_data_cpy->apps->size, PRTE_GLOBAL_ARRAY_MAX_SIZE, 2);
-    for(n = 0; n < job_data_cpy->apps->size; n++){
-        prte_app_context_t *app_ptr = pmix_pointer_array_get_item(job_data_cpy->apps, n);
+    job_data_cpy->apps = PMIX_NEW(pmix_pointer_array_t);
+    pmix_pointer_array_init(job_data_cpy->apps, job_data_orig->apps->size, PRTE_GLOBAL_ARRAY_MAX_SIZE, 2);
+    for(n = 0; n < job_data_orig->apps->size; n++){
+        prte_app_context_t *app_ptr = pmix_pointer_array_get_item(job_data_orig->apps, n);
         if(NULL != app_ptr){
             prte_app_context_t *app_cpy = PMIX_NEW(prte_app_context_t);
             memcpy(app_cpy, app_ptr, sizeof(prte_app_context_t));
@@ -1602,7 +1599,6 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data, size_t r
                 prte_add_attribute(&app_cpy->attributes, attr->key, attr->local, &attr->data.data, attr->data.type);
                 i++;   
             }
-            printf("num attr in app: %d\n", i);
             for(i = 0; i < app_cpy->num_procs; i++){
                 prte_proc_t *app_proc;
                 // Protect the procs so we can release the job data later
@@ -1610,40 +1606,75 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data, size_t r
                     PMIX_RETAIN(app_proc);
                 }
             }
-            pmix_pointer_array_add(job_data->apps, app_cpy);
+            pmix_pointer_array_add(job_data_cpy->apps, app_cpy);
         }
     }
     /* copy the procs array so we can adjust it without changing the actual job data */
-    job_data->procs = PMIX_NEW(pmix_pointer_array_t);
-    pmix_pointer_array_init(job_data->procs, 4, PRTE_GLOBAL_ARRAY_MAX_SIZE,
+    job_data_cpy->procs = PMIX_NEW(pmix_pointer_array_t);
+    pmix_pointer_array_init(job_data_cpy->procs, 4, PRTE_GLOBAL_ARRAY_MAX_SIZE,
                             PRTE_GLOBAL_ARRAY_BLOCK_SIZE);
-    for(n = 0; n < job_data_cpy->procs->size; n++){
-        prte_proc_t *proc_ptr = pmix_pointer_array_get_item(job_data_cpy->procs, n);
+    for(n = 0; n < job_data_orig->procs->size; n++){
+        prte_proc_t *proc_ptr = pmix_pointer_array_get_item(job_data_orig->procs, n);
         if(NULL != proc_ptr){
-            int ret = pmix_pointer_array_add(job_data->procs, proc_ptr);
+            int ret = pmix_pointer_array_add(job_data_cpy->procs, proc_ptr);
             /* Protect the procs when we release the array later when releasing the job data */
             PMIX_RETAIN(proc_ptr); 
         }
     }
+
+    /* copy the map and nodes, protect the nodes in the list*/
+    job_data_cpy->map = PMIX_NEW(prte_job_map_t);
+    memcpy(job_data_cpy->map, job_data_orig->map, sizeof(prte_job_map_t));
+    job_data_cpy->map->nodes = PMIX_NEW(pmix_pointer_array_t);
+    prte_node_t *node;
+    for(node_index = 0; node_index < job_data_orig->map->nodes->size; node_index++){
+        if(NULL == (node = job_data_orig->map->nodes->addr[node_index])){
+            continue;
+        }
+
+        /* create a node copy with all copyable values */
+        prte_node_t *node_cpy; // = PMIX_NEW(prte_node_t);
+        prte_node_copy(&node_cpy, node);
+
+        /* create a copy of the proc array */
+        node_cpy->procs = PMIX_NEW(pmix_pointer_array_t);
+        for(n = 0; n < node->procs->size; n++){
+            prte_proc_t *proc_ptr = pmix_pointer_array_get_item(node->procs, n);
+            if(NULL != proc_ptr){
+                int ret = pmix_pointer_array_add(node_cpy->procs, proc_ptr);
+                /* Protect the procs when we release the array later when releasing the job data copy */
+                PMIX_RETAIN(proc_ptr); 
+            }
+        }
+
+        /* copy the attribute list */
+        PMIX_CONSTRUCT(&node_cpy->attributes, pmix_list_t);
+        PMIX_LIST_FOREACH(attr, &node->attributes, prte_attribute_t){
+            prte_add_attribute(&node_cpy->attributes, attr->key, attr->local, &attr->data.data, attr->data.type); 
+        }
+
+        pmix_pointer_array_add(job_data_cpy->map->nodes, node);
+        
+    }
+
     
-    /* copy the map and protect the nodes in the list*/
-    job_data->map = PMIX_NEW(prte_job_map_t);
-    memcpy(job_data->map, job_data_cpy->map, sizeof(prte_job_map_t));
-    PMIX_RETAIN(job_data->map->nodes);
+    //PMIX_RETAIN(job_data_cpy->map->nodes);
 
     /* create the delta pset, i.e. determine the procs to be finalized */
     prte_proc_t **delta_procs = malloc(rc_nprocs * sizeof(prte_proc_t*));
     *_delta_procs = delta_procs;
 
     /* We traverse the list of nodes and their procs in reverse order and choose the ones of our job */
-    prte_app_context_t *app = job_data->apps->addr[0];
-    prte_node_t **job_nodes = job_data->map->nodes->addr; // or should we use dvm nodes?
-    prte_node_t *node;
-    size_t proc_index = 0, node_index;
-    for(node_index = job_data->map->num_nodes -1; node_index >= 0; node_index--){
+    prte_app_context_t *app = job_data_cpy->apps->addr[0]; //FIXME: multi-app
+    prte_node_t **job_nodes = job_data_cpy->map->nodes->addr; // or should we use dvm nodes?
+    
+    size_t proc_index = 0;
+    for(node_index = job_data_cpy->map->nodes->size - 1; node_index >= 0; node_index--){
         if(NULL == (node = job_nodes[node_index])){
             continue;
         }
+        
+        
         int32_t cur_slot = node->slots_inuse - 1;
         //printf("node index: %d, slots_in_use: %d\n", node_index, node->slots_inuse);
         for(; cur_slot >= 0 && proc_index < rc_nprocs; ){
@@ -1677,22 +1708,22 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data, size_t r
             }
 
             /* we added this proc to the delta pset. Now remove it from the job & app proc lists */
-
-            for(n = 0; n < job_data->procs->size; n++){
+            for(n = 0; n < job_data_cpy->procs->size; n++){
                 prte_proc_t * proct;
-                if(NULL == (proct = pmix_pointer_array_get_item(job_data->procs, n))){
+                if(NULL == (proct = pmix_pointer_array_get_item(job_data_cpy->procs, n))){
                     continue;
                 }
                 if(proct->name.rank == delta_procs[proc_index]->name.rank){
-                    int ret = pmix_pointer_array_set_item(job_data->procs, n, NULL);
-                    if(NULL != pmix_pointer_array_get_item(job_data->procs, n));
+                    int ret = pmix_pointer_array_set_item(job_data_cpy->procs, n, NULL);
+                    pmix_pointer_array_set_item( proct->node->procs, n, NULL);
+                    proct->node->num_procs--;
                     PMIX_RELEASE(proct); // for referenece counting
                 }
             }
 
             for(n = 0; n < app->procs.size; n++){
                 prte_proc_t * proct; 
-                if(NULL == (proct = pmix_pointer_array_get_item(job_data->procs, n))){
+                if(NULL == (proct = pmix_pointer_array_get_item(job_data_cpy->procs, n))){
                     continue;
                 }
                 if(proct->name.rank == delta_procs[proc_index]->name.rank){ 
@@ -1715,21 +1746,20 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data, size_t r
     }
 
     /* set the number of nodes and procs accordingly */
-    printf("Setup sub: jdata->num procs: %d, rc_nprocs %d\n", job_data->num_procs, rc_nprocs);
-    job_data->num_procs -= rc_nprocs;
+    job_data_cpy->num_procs -= rc_nprocs;
     app->num_procs -= rc_nprocs;
 
     /* TODO: Need to respect procs from other jobs */
-    //job_data->map->num_nodes -= rm_nodes;
+    //job_data_cpy->map->num_nodes -= rm_nodes;
 
     
     
 
-    memset(&job_data->children, 0, sizeof(pmix_list_t));
-    PMIX_CONSTRUCT(&job_data->children, pmix_list_t);
+    memset(&job_data_cpy->children, 0, sizeof(pmix_list_t));
+    PMIX_CONSTRUCT(&job_data_cpy->children, pmix_list_t);
     /* prepend the launch message with the sub command, so it is handle correctly */ 
     prte_daemon_cmd_flag_t command = PRTE_DAEMON_DVM_SUB_PROCS;
-    PMIx_Data_pack(NULL, &job_data->launch_msg, &command, 1, PMIX_UINT8);
+    PMIx_Data_pack(NULL, &job_data_cpy->launch_msg, &command, 1, PMIX_UINT8);
 }
 
 static void _rchandler(int sd, short args, void *cbdata)
@@ -1748,7 +1778,7 @@ static void _rchandler(int sd, short args, void *cbdata)
     int ndaemons = prte_process_info.num_daemons;
     pmix_proc_t daemon_procid;
 
-    printf("PRRTE Master: Recieved Resource Chnage request\n");
+    printf("PRRTE Master: Recieved Resource Change request\n");
     
 
     if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
@@ -1810,9 +1840,10 @@ static void _rchandler(int sd, short args, void *cbdata)
     //    printf("    [%d: %s]\n", n, PRTE_NAME_PRINT(&delta_procs[n]->name));
     //}
     printf("--> job size after resource change will be: %d \n\n",job_data->num_procs);
-
-    
-
+    char *job_data_string;
+    prte_job_print(&job_data_string, job_data);
+    //printf("%s\n", job_data_string);
+    free(job_data_string);
     
 
     /* Send the 'Define Pset' command for the delta PSet to all daemons */
@@ -1859,7 +1890,6 @@ static void _rchandler(int sd, short args, void *cbdata)
             PMIX_RELEASE(sig);
             return;
         }
-        printf("sent job updates to daemons\n");
         PMIX_DATA_BUFFER_DESTRUCT(&job_data->launch_msg);
         PMIX_DATA_BUFFER_CONSTRUCT(&job_data->launch_msg);
         /* maintain accounting */
@@ -1882,7 +1912,6 @@ static void _rchandler(int sd, short args, void *cbdata)
         ret = PMIx_Data_pack(NULL, buf2, (void*)&delta_pset_name, 1, PMIX_STRING);
         //prte_rml.send_buffer_nb(&daemon_procid, buf2, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
         PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
-        printf("send rc define to daemon: %d\n", n);
     }
 
 

@@ -94,6 +94,8 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
     prte_output_verbose(2, prte_pmix_server_globals.output, "%s register nspace for %s",
                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_JOBID_PRINT(jdata->nspace));
 
+
+
     /* setup the info list */
     PMIX_INFO_LIST_START(info);
     uid = geteuid();
@@ -150,7 +152,10 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
         prte_remove_attribute(&jdata->attributes, PRTE_JOB_INFO_CACHE);
         PMIX_RELEASE(cache);
     }
-
+    char * job_string;
+    prte_job_print(&job_string, jdata);
+    //printf("%s\n", job_string);
+    free(job_string);
     /* assemble the node and proc map info */
     list = NULL;
     procs = NULL;
@@ -158,7 +163,9 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
     PMIX_LOAD_NSPACE(pproc.nspace, jdata->nspace);
     PMIX_CONSTRUCT(&local_procs, pmix_list_t);
     for (i = 0; i < map->nodes->size; i++) {
+        
         if (NULL != (node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, i))) {
+            
             micro = NULL;
             tmp = NULL;
             vpid = PMIX_RANK_VALID;
@@ -167,6 +174,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
             /* assemble all the ranks for this job that are on this node */
             for (k = 0; k < node->procs->size; k++) {
                 if (NULL != (pptr = (prte_proc_t *) pmix_pointer_array_get_item(node->procs, k))) {
+                    
                     if (PMIX_CHECK_NSPACE(jdata->nspace, pptr->name.nspace)) {
                         pmix_argv_append_nosize(&micro, PRTE_VPID_PRINT(pptr->name.rank));
                         if (pptr->name.rank < vpid) {
@@ -176,6 +184,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
                     }
                     if (PRTE_PROC_MY_NAME->rank == node->daemon->name.rank) {
                         /* track all procs on our node */
+                        
                         nm = PMIX_NEW(prte_namelist_t);
                         PMIX_LOAD_PROCID(&nm->name, pptr->name.nspace, pptr->name.rank);
                         pmix_list_append(&local_procs, &nm->super);
@@ -192,6 +201,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
                     }
                 }
             }
+            //if (prte_get_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, NULL, PMIX_BOOL))exit(1);
             /* assemble the rank/node map */
             if (NULL != micro) {
                 tmp = pmix_argv_join(micro, ',');
@@ -219,6 +229,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
             /* add the local peers */
             if (NULL != tmp) {
                 PMIX_INFO_LIST_ADD(ret, iarray, PMIX_LOCAL_PEERS, tmp, PMIX_STRING);
+                printf("LOCAL_PEERS_REGISTER_NSPACE: %s\n", tmp);
                 free(tmp);
             }
             /* if oversubscribed, mark it */
@@ -232,6 +243,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
             PMIX_INFO_LIST_RELEASE(iarray);
         }
     }
+    
     /* let the PMIx server generate the nodemap regex */
     if (NULL != list) {
         tmp = pmix_argv_join(list, ',');
@@ -423,6 +435,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
         PMIX_INFO_LOAD(&devinfo[1], PMIX_HOSTNAME, NULL, PMIX_STRING);
     }
 
+
     for (n = 0; n < map->nodes->size; n++) {
         if (NULL == (node = (prte_node_t *) pmix_pointer_array_get_item(map->nodes, n))) {
             continue;
@@ -587,8 +600,8 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
     if (prte_get_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, NULL, PMIX_BOOL)) {
         nlocalprocs = INT_MIN;
         prte_remove_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL);
+        
     }
-    //printf("Node %s: nlocalprocs = %d\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), nlocalprocs);
 
     /* register it */
     PMIX_INFO_LIST_CONVERT(ret, info, &darray);

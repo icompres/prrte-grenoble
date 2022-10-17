@@ -152,8 +152,6 @@ static void _query(int sd, short args, void *cbdata)
                     kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_PSET_NAME, q->qualifiers[n].value.data.string, PMIX_STRING);
                     pmix_list_append(&results, &kv->super);
-                    
-                    //printf("added qualifier --> size = %d\n", pmix_list_get_size(&results));
                 }
             }
         }
