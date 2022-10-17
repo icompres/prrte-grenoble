@@ -1389,6 +1389,10 @@ static pmix_status_t parse_rc_cmd(char *cmd, pmix_res_change_type_t *_rc_type, s
 
 }
 
+/* updates the job data object by adding resources and creates a corresponding delta PSet.
+ * We use this job data object in the launch process.
+ * THE ACTUAL JOB DATA IS UPDATED AT THE PRTE MASTER!
+ */
 static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc_t ***_delta_procs){
     
     size_t n;
@@ -1430,7 +1434,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
         ++offset;
     }
 
-    /* set the deamon vpid, node, ranks etc. for every proc */
+    /* Iterate over the nodes and add processes where possible */
     prte_node_t **job_nodes = job_data->map->nodes->addr; 
     size_t proc_index = 0, node_index, daemon_index;
 
@@ -1442,12 +1446,14 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
             if(NULL == (node = job_nodes[node_index])){
                 continue;
             }
-            printf("node slots: %d\n", node->slots);
-            /* Get the daemon of this node to set the parent of the proc*/
+
+            /* Get the daemon of this node to set it as the parent of the proc later on*/
             prte_proc_t *daemon_proc = NULL;
             pmix_rank_t parent_vpid = PMIX_RANK_INVALID;
             for(daemon_index = 0; daemon_index < prte_get_job_data_object(PRTE_PROC_MY_PROCID->nspace)->procs->size; daemon_index++){
+                
                 daemon_proc = pmix_pointer_array_get_item(prte_get_job_data_object(PRTE_PROC_MY_PROCID->nspace)->procs, daemon_index);
+                
                 if(NULL != daemon_proc && (0 == strcmp(daemon_proc->node->name,node->name))){
                     parent_vpid = daemon_proc->name.rank;
                 }
@@ -1495,6 +1501,8 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
                 if(NULL == (dnode = pmix_pointer_array_get_item(djob->map->nodes, n))){
                     continue;
                 }
+
+                /* Do we already have this node in our job? */
                 already_allocated = false;
                 for(node_index = 0; node_index < job_data->map->nodes->size; node_index++){
                     if(NULL == (node = job_nodes[node_index])){
@@ -1505,6 +1513,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
                         break;
                     }
                 }
+
                 /* add the node to the job */
                 if(!already_allocated){
                     //printf("NOT ENOUGH NODES: Adding new node %s to job %s to fullfill the request\n", dnode->name, job_data->nspace);
@@ -1531,6 +1540,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
     if(proc_index < rc_nprocs){
         printf("Not enough nodes/slots available for this request.\n");
     }
+
     /* add the procs to the job and app context */
     prte_app_context_t *app = job_data->apps->addr[0];
     for(n = 0; n < rc_nprocs; n++){
@@ -1540,13 +1550,18 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
         job_data->num_procs++;
         app->num_procs++;
     }
+
+    /* FIXME: Do we still need this? */
     bool fully_described = true;
-    //prte_set_attribute(&job_data->attributes, PRTE_JOB_FULLY_DESCRIBED, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
     prte_set_attribute(&job_data->attributes, PRTE_JOB_FIXED_DVM, PRTE_ATTR_GLOBAL, &fully_described, PMIX_BOOL);
 
+    /* Update highest rank */
     highest_rank_global = highest_rank + rc_nprocs;
 }
 
+/* creates a copy of the job data, adjusts it to account for resource subtraction and defines the corresponding delta PSet
+ * The job data object is ONLY used to update the PMIx namespace. The actual job data IS NOT TOUCHED!
+ */
 static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size_t rc_nprocs, prte_proc_t ***_delta_procs){
     
     size_t n, i, rm_nodes = 0;
@@ -1558,14 +1573,14 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
 
     PMIX_RELEASE(job_data_cpy->apps);
     PMIX_RELEASE(job_data_cpy->procs);
-    //PRTE_DESTRUCT(&job_data_cpy->attributes);
+    
     /* create a copy of our job data object 
      * We need to use a copy as we do not want to change our stored job data,
      * instead we want to send an adjusted job data object only to update the pmix sever's job data
      */
     memcpy(job_data_cpy, job_data_orig, sizeof(prte_job_t));
 
-    /*TODO list foreach */
+    /* TODO: copy job attributes */
     /* copy the attributes list */
     memset(&job_data_cpy->attributes, 0, sizeof(pmix_list_t));
     PMIX_CONSTRUCT(&job_data_cpy->attributes, pmix_list_t);
@@ -1676,9 +1691,7 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
         
         
         int32_t cur_slot = node->slots_inuse - 1;
-        //printf("node index: %d, slots_in_use: %d\n", node_index, node->slots_inuse);
         for(; cur_slot >= 0 && proc_index < rc_nprocs; ){
-            //printf("cur_slot: %d\n", cur_slot);
             for(i = node->procs->size; i >= 0; i--){
                 if(NULL == (delta_procs[proc_index] = pmix_pointer_array_get_item(node->procs, i))){
                     continue;
@@ -1757,11 +1770,20 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
 
     memset(&job_data_cpy->children, 0, sizeof(pmix_list_t));
     PMIX_CONSTRUCT(&job_data_cpy->children, pmix_list_t);
-    /* prepend the launch message with the sub command, so it is handle correctly */ 
+
+    /* prepend the launch message with the sub command, so it is handle correctly when using the launch process*/ 
     prte_daemon_cmd_flag_t command = PRTE_DAEMON_DVM_SUB_PROCS;
     PMIx_Data_pack(NULL, &job_data_cpy->launch_msg, &command, 1, PMIX_UINT8);
 }
 
+/* Callback for resource change requests 
+ * 1. Parse the request
+ * 2. Create/Adjust job data and create delta PSet
+ * 3. Send PSet to all daemons
+ * 4. SUB: get launch message and send launch command (will only update PMIx namespace)
+ * 5. Send resource change query data to all daemons
+ * 6. ADD: Get launch message and send launch command
+ */
 static void _rchandler(int sd, short args, void *cbdata)
 {
     prte_pmix_server_op_caddy_t *scd = (prte_pmix_server_op_caddy_t *) cbdata;
@@ -1786,7 +1808,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         return;
     }
 
-    /* parse the resource change command message */
+    /* 1. parse the resource change command message */
     for(n=0; n < ninfo; n++){
         if(0 == strcmp(info[n].key, "PMIX_RC_CMD")){
             PMIX_VALUE_UNLOAD(rc, &info[n].value, (void**)&recv_cmd, &sz);
@@ -1813,7 +1835,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         return;
     }
 
-    /* create the delta pset and update the job_data */
+    /* 2. create the delta pset and update the job_data */
 
     make_timestamp_base(&cur_master_timing_frame->jdata_start);
 
@@ -1846,9 +1868,8 @@ static void _rchandler(int sd, short args, void *cbdata)
     free(job_data_string);
     
 
-    /* Send the 'Define Pset' command for the delta PSet to all daemons */
+    /* 3. Send the 'Define Pset' command for the delta PSet to all daemons */
     make_timestamp_base(&cur_master_timing_frame->pset_start);
-
 
     PMIX_LOAD_PROCID(&daemon_procid, PRTE_PROC_MY_HNP->nspace, 0);
     for(n=0; n < ndaemons; n++){
@@ -1867,7 +1888,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         PRTE_RML_SEND(ret, daemon_procid.rank, buf, PRTE_RML_TAG_MALLEABILITY);
     }
 
-    /* retrieve the data needed by the launcher" && send "launch" command to 
+    /* 4. retrieve the data needed by the launcher" && send "launch" command to 
      * When removing procs we need to do this before we make the query info available
      * 
      * FIXME: When removing procs, the launch msg is not sent by prte_plm_base_launch_apps!
@@ -1896,7 +1917,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         PMIX_RELEASE(sig);
     }
 
-     /* Inform daemons about res change so they can answer related queries */      
+     /* 5. Inform daemons about res change so they can answer related queries */      
     make_timestamp_base(&cur_master_timing_frame->rc_publish_start);
 
     cmd = PRTE_DYNRES_DEFINE_RES_CHANGE;
@@ -1917,7 +1938,7 @@ static void _rchandler(int sd, short args, void *cbdata)
 
     make_timestamp_base(&cur_master_timing_frame->apply_start); 
 
-    /* retrieve the data needed by the launcher && send launch command to daemons
+    /* 6. retrieve the data needed by the launcher && send launch command to daemons
      * NOTE: When adding procs, the launch msg is sent by prte_plm_base_launch_apps!
      */
     if(rc_type == PMIX_RES_CHANGE_ADD){
@@ -1926,40 +1947,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         cd->job_state = PRTE_JOB_STATE_LAUNCH_APPS;
         prte_plm_base_launch_apps(0,0, cd);
     }
-    //if(rc_type == PMIX_RES_CHANGE_SUB){
-    //    /* message goes to all daemons */
-    //    sig = PMIX_NEW(prte_grpcomm_signature_t);
-    //    sig->signature = (pmix_proc_t *) malloc(sizeof(pmix_proc_t));
-    //    PMIX_LOAD_PROCID(&sig->signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
-    //    sig->sz = 1;
-    //    if (PRTE_SUCCESS != (rc = prte_grpcomm.xcast(sig, PRTE_RML_TAG_DAEMON, &job_data->launch_msg))) {
-    //        PRTE_ERROR_LOG(rc);
-    //        PMIX_RELEASE(sig);
-    //        return;
-    //    }
-    //    PMIX_DATA_BUFFER_DESTRUCT(&job_data->launch_msg);
-    //    PMIX_DATA_BUFFER_CONSTRUCT(&job_data->launch_msg);
-    //    /* maintain accounting */
-    //    PMIX_RELEASE(sig);
-    //}
 
-    /*
-    pmix_data_buffer_t *buf3;
-    for(n=0; n < ndaemons; n++){
-        PMIX_DATA_BUFFER_CREATE(buf3);
-        PMIX_DATA
-        *buf3 = job_data->launch_msg;
-        daemon_procid.rank = n;
-       
-        prte_rml.send_buffer_nb(&daemon_procid, buf3, PRTE_RML_TAG_DAEMON, prte_rml_send_callback, NULL);
-    }
-    */
-    
-    /* maintain accounting */
-    //PMIX_RELEASE(sig);    
-
-    //memset(&job_data->launch_msg, 0, sizeof(pmix_data_buffer_t));
-    //PMIX_DATA_BUFFER_CONSTRUCT(&job_data->launch_msg);
     ///* We created a copy of the job data so release it here */
     //if(rc_type == PMIX_RES_CHANGE_SUB){
     //    PMIX_RELEASE(job_data);

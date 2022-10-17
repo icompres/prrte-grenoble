@@ -1287,19 +1287,12 @@ next:
                 
                 if(PMIX_CHECK_PROCID(&node_proc->name, &pptr->name)){
                     found = true;
-
-                    //pmix_pointer_array_set_item(pptr->node->procs, pp, NULL);
-                    //PMIX_RELEASE(node_proc);
-                    //pmix_pointer_array_set_item(pptr->node->procs, pp, pptr);
                 }
             }
             if(!found){
                 pmix_pointer_array_add(pptr->node->procs, pptr);
                 pptr->node->num_procs++;
             }
-
-            //pmix_pointer_array_add(pptr->node->procs, pptr);
-            //pptr->node->num_procs++;
 
             /* and connect it back to its job object, if not already done */
             if (NULL == pptr->job) {

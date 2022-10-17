@@ -152,10 +152,10 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
         prte_remove_attribute(&jdata->attributes, PRTE_JOB_INFO_CACHE);
         PMIX_RELEASE(cache);
     }
-    char * job_string;
-    prte_job_print(&job_string, jdata);
+    //char * job_string;
+    //prte_job_print(&job_string, jdata);
     //printf("%s\n", job_string);
-    free(job_string);
+    //free(job_string);
     /* assemble the node and proc map info */
     list = NULL;
     procs = NULL;
@@ -201,7 +201,6 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
                     }
                 }
             }
-            //if (prte_get_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, NULL, PMIX_BOOL))exit(1);
             /* assemble the rank/node map */
             if (NULL != micro) {
                 tmp = pmix_argv_join(micro, ',');
@@ -594,7 +593,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
 
     /* If this is an update related to resource subtraction retain the PMIx sever's own nlocal accounting
      * Otherwise, this will eventually lead to nlocal = 0 which would trigger a all clients terminated event
-     * TODO: Find a better way to do this
+     * FIXME: Find a better way to do this
      */
     int nlocalprocs = jdata->num_local_procs;
     if (prte_get_attribute(&jdata->attributes, PRTE_JOB_RETAIN_NLOCAL, NULL, PMIX_BOOL)) {
