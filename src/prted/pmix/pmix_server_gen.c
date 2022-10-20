@@ -1816,6 +1816,7 @@ void pmix_server_define_res_change(int status, pmix_proc_t *sender, pmix_data_bu
     prte_res_change_t *res_change = PMIX_NEW(prte_res_change_t);
     pmix_res_change_type_t rc_type;
     char *delta_pset_name = (char*) malloc(PMIX_MAX_KEYLEN);
+    char *assoc_pset_name = (char*) malloc(PMIX_MAX_KEYLEN);
 
     if(NULL == daemon_timing_list)
         daemon_timing_list = (node_t *) calloc(1, sizeof(node_t));
@@ -1838,6 +1839,16 @@ void pmix_server_define_res_change(int status, pmix_proc_t *sender, pmix_data_bu
     }
     strncpy(res_change->rc_pset, delta_pset_name, PMIX_MAX_KEYLEN);
     free(delta_pset_name);
+
+    /* unpack the name of the associated pset of the resource change */
+    ret = PMIx_Data_unpack(NULL, buffer, &assoc_pset_name, &n, PMIX_STRING);
+    if (PMIX_SUCCESS != ret) {
+        PMIX_RELEASE(res_change);
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+    strncpy(res_change->associated_pset, assoc_pset_name, PMIX_MAX_KEYLEN);
+    free(assoc_pset_name);
 
     /* Dump job info before resource change */
     prte_job_t *job_to_print = NULL;
@@ -2017,6 +2028,7 @@ void pmix_server_unpublish_res_change(int status, pmix_proc_t *sender, pmix_data
     char *rc_pset = (char*) malloc(PMIX_MAX_KEYLEN);
     pmix_proc_t notifier;
     make_timestamp_base(&cur_daemon_timing_frame->rc_unpublish);
+
     /* unpack the name of the pset describing the resource change */
     ret = PMIx_Data_unpack(NULL, buffer, &rc_pset , &n, PMIX_STRING);
     if (PMIX_SUCCESS != ret) {
@@ -2174,15 +2186,15 @@ void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_
             break;
         }
     }
-    /* Dump job info before resource change */
-    prte_job_t *job_to_print = NULL;
-    pmix_server_pset_t *rc_pset_ptr;
-    PMIX_LIST_FOREACH(rc_pset_ptr, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-        if(0 == strcmp(rc_pset_ptr->name, res_change->rc_pset)){
-            job_to_print = prte_get_job_data_object(rc_pset_ptr->members[0].nspace);
-            break;
-        }
-    }
+    ///* Dump job info before resource change */
+    //prte_job_t *job_to_print = NULL;
+    //pmix_server_pset_t *rc_pset_ptr;
+    //PMIX_LIST_FOREACH(rc_pset_ptr, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+    //    if(0 == strcmp(rc_pset_ptr->name, res_change->rc_pset)){
+    //        job_to_print = prte_get_job_data_object(rc_pset_ptr->members[0].nspace);
+    //        break;
+    //    }
+    //}
     make_timestamp_base(&cur_daemon_timing_frame->rc_end);
     free(rc_pset);
 }

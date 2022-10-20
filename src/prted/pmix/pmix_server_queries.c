@@ -85,8 +85,9 @@ static void _query(int sd, short args, void *cbdata)
     prte_app_context_t *app;
     int matched;
     pmix_proc_info_t *procinfo;
-    pmix_info_t *info;
+    pmix_info_t *info, *iptr;
     pmix_data_array_t *darray;
+    pmix_data_array_t *qualifiers;
     prte_proc_t *proct;
     size_t sz;
 
@@ -107,7 +108,17 @@ static void _query(int sd, short args, void *cbdata)
         PMIX_LOAD_NSPACE(jobid, cd->proct.nspace);
         /* see if they provided any qualifiers */
         if (NULL != q->qualifiers && 0 < q->nqual) {
+
+            /* Todo: Release */
+            PMIX_DATA_ARRAY_CREATE(qualifiers, q->nqual, PMIX_INFO);
+            iptr = (pmix_info_t *) qualifiers->array;
+
             for (n = 0; n < q->nqual; n++) {
+
+                /* Load the qualifier into the array for the response */
+                strcpy(iptr[n].key, q->qualifiers[n].key);
+                PMIX_VALUE_XFER_DIRECT(rc, &iptr[n].value, &q->qualifiers[n].value);
+
                 prte_output_verbose(2, prte_pmix_server_globals.output,
                                     "%s qualifier key \"%s\" : value \"%s\"",
                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), q->qualifiers[n].key,
@@ -148,12 +159,18 @@ static void _query(int sd, short args, void *cbdata)
                     hostname = q->qualifiers[n].value.data.string;
                 } else if (PMIX_CHECK_KEY(&q->qualifiers[n], PMIX_NODEID)) {
                     PMIX_VALUE_GET_NUMBER(rc, &q->qualifiers[n].value, nodeid, uint32_t);
+                /* FIXME: This is probably not need anymore. Anyways the inclusion of the PMIX_QUALFIERS in the results is missing so need to have a look on it later */
                 }else if(PMIX_CHECK_KEY(&q->qualifiers[n], PMIX_PSET_NAME)){
                     kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_PSET_NAME, q->qualifiers[n].value.data.string, PMIX_STRING);
                     pmix_list_append(&results, &kv->super);
                 }
             }
+            
+            /* Append the qualifiers to the results */
+            kv = PMIX_NEW(prte_info_item_t);
+            PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_QUALIFIERS, qualifiers, PMIX_DATA_ARRAY);
+            pmix_list_append(&results, &kv->super);
         }
         for (n = 0; NULL != q->keys[n]; n++) {
             prte_output_verbose(2, prte_pmix_server_globals.output,
@@ -523,34 +540,138 @@ static void _query(int sd, short args, void *cbdata)
                     pmix_list_append(&results, &kv->super);
                 }
             }
-            else if (0 == strcmp(q->keys[n], "PMIX_RC_TYPE")) {
+            /* Query for resource change information */
+            else if (0 == strcmp(q->keys[n], PMIX_RC_TYPE) || 0 == strcmp(q->keys[n], PMIX_RC_DELTA) || 0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
+                char *rc_pset_qualifier = NULL;
+                char *assoc_pset_qualifier = NULL;
+                int num_requirements = 0;
+                int num_requirements_fullfilled = 0;
+                pmix_proc_t requestor;
+
+                /* If we do not have any resource changes in our list there is nothing we can do*/
                 if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
                     continue;
                 }
-                prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
-                if(!res_change->queryable){
-                    continue;
+
+                /* Check if they specified a particular delta PSet or associated PSet qualifier */
+                for(k=0; k < q->nqual; k++){
+                    if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_DELTA)){ 
+                        rc_pset_qualifier = q->qualifiers[k].value.data.string;
+                        num_requirements ++;
+
+                    }else if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_ASSOC)){
+                        assoc_pset_qualifier = q->qualifiers[k].value.data.string;
+                        num_requirements ++;
+                    }else if(0 == strcmp(q->qualifiers[k].key, PMIX_PROCID)){
+                        strcpy(requestor.nspace, q->qualifiers[k].value.data.proc->nspace);
+                        requestor.rank = q->qualifiers[k].value.data.proc->rank;
+                    }
                 }
-                /* For now default to the first res change in the list */
-                kv = PMIX_NEW(prte_info_item_t);
-                PMIX_INFO_LOAD(&kv->info, "PMIX_RC_TYPE", &res_change->rc_type, PMIX_UINT8);
-                pmix_list_append(&results, &kv->super);
-            
-            } else if (0 == strcmp(q->keys[n], "PMIX_RC_PSET")) {
-                if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
-                    continue;
-                }
+                prte_res_change_t *res_change = NULL;
+                int flag = 0;
                 
-                prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
-                if(!res_change->queryable){
+                /* If they specified qualifieres we need to search for the right resource change in our list */
+                if(0 < num_requirements){
+                    
+                    PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+                        
+                        if(!res_change->queryable){
+                            continue;
+                        }
+
+                        num_requirements_fullfilled = 0;
+
+                        /* They specified the name of the associated PSet as qualifier */
+                        if(NULL != assoc_pset_qualifier){
+                            /* Need to handle the special case of 'mpi://SELF' separately. We search for the resource change where the requesting proc is included in the delta PSet */
+                            if(0 == strcmp("mpi://SELF", assoc_pset_qualifier)){
+                                pmix_server_pset_t * pset;
+                                
+
+                                PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+                                    if(0 == strcmp(pset->name, res_change->rc_pset)){
+
+                                        break;
+                                    }
+                                }
+                                for(k = 0; k < pset->num_members; k++){
+                                    if(PMIX_CHECK_PROCID(&requestor, &pset->members[k])){
+                                        ++num_requirements_fullfilled;
+                                        break;
+                                    }
+                                }
+                            }else if(0 == strcmp(res_change->associated_pset, assoc_pset_qualifier)){
+                                ++num_requirements_fullfilled;
+                            }
+                        }
+
+                        /* They specified the name of the associated PSet as qualifier */
+                        if(NULL != rc_pset_qualifier && 0 == strcmp(res_change->rc_pset, rc_pset_qualifier)){
+                            ++num_requirements_fullfilled;
+                        }
+
+                        /* Break out if this res change fullfills all requirements*/
+                        if(num_requirements_fullfilled == num_requirements){
+                            flag = 1;
+                            break;
+                        }
+                    }
+                }else{
+                    /* Just default to the first resource change in the list */
+                    res_change = (prte_res_change_t *) pmix_list_get_first(&prte_pmix_server_globals.res_changes);
+                    if(!res_change->queryable){
+                        continue;
+                    }
+                    flag = 1;
+                }
+
+                if(NULL == res_change || flag == 0){
+
+                    printf("no res change found matching these requirements\n");
                     continue;
                 }
-                /* For now default to the first res change in the list */
+
+                /* Load the value for the requested key*/
                 kv = PMIX_NEW(prte_info_item_t);
-                PMIX_INFO_LOAD(&kv->info, "PMIX_RC_PSET", res_change->rc_pset, PMIX_STRING);
+                if (0 == strcmp(q->keys[n], PMIX_RC_TYPE)) {
+                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_TYPE, &res_change->rc_type, PMIX_UINT8);
+                }else if (0 == strcmp(q->keys[n], PMIX_RC_DELTA)){
+                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_DELTA, res_change->rc_pset, PMIX_STRING);
+                /* There might be the situation where a client specifies a special value for the PMIX_ASSOC qualifier (e.g. mpi://self). 
+                 * So we might return another PMIX_ASSOC value than specified in as qualifier.
+                 */
+                }else if (0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
+                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, res_change->associated_pset, PMIX_STRING);
+                }
                 pmix_list_append(&results, &kv->super);
-  
-            
+                
+            //}else if (0 == strcmp(q->keys[n], "PMIX_RC_TYPE")) {
+            //    if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
+            //        continue;
+            //    }
+            //    prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
+            //    if(!res_change->queryable){
+            //        continue;
+            //    }
+            //    /* For now default to the first res change in the list */
+            //    kv = PMIX_NEW(prte_info_item_t);
+            //    PMIX_INFO_LOAD(&kv->info, "PMIX_RC_TYPE", &res_change->rc_type, PMIX_UINT8);
+            //    pmix_list_append(&results, &kv->super);
+            //
+            //} else if (0 == strcmp(q->keys[n], "PMIX_RC_PSET")) {
+            //    if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
+            //        continue;
+            //    }
+            //    
+            //    prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
+            //    if(!res_change->queryable){
+            //        continue;
+            //    }
+            //    /* For now default to the first res change in the list */
+            //    kv = PMIX_NEW(prte_info_item_t);
+            //    PMIX_INFO_LOAD(&kv->info, "PMIX_RC_PSET", res_change->rc_pset, PMIX_STRING);
+            //    pmix_list_append(&results, &kv->super);
+
             } else if (0 == strcmp(q->keys[n], PMIX_JOB_SIZE)) {
                 jdata = prte_get_job_data_object(jobid);
                 if (NULL == jdata) {
@@ -575,7 +696,7 @@ done:
         if (0 == pmix_list_get_size(&results)) {
             ret = PMIX_ERR_NOT_FOUND;
         } else {
-            if (pmix_list_get_size(&results) < cd->ninfo) {
+            if (pmix_list_get_size(&results) < cd->ninfo + 1) {
                 ret = PMIX_QUERY_PARTIAL_SUCCESS;
             } else {
                 ret = PMIX_SUCCESS;

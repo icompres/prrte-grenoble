@@ -1789,7 +1789,7 @@ static void _rchandler(int sd, short args, void *cbdata)
     prte_pmix_server_op_caddy_t *scd = (prte_pmix_server_op_caddy_t *) cbdata;
     pmix_info_t *info = scd->info;
     size_t ninfo = scd->ninfo;
-    size_t n, i, ret, sz, rc_nprocs;
+    size_t n, i, ret, sz, rc_nprocs, flag = 0;
     pmix_status_t rc=PMIX_SUCCESS;
     char *recv_cmd = NULL;
     char *delta_pset_name;
@@ -1799,14 +1799,18 @@ static void _rchandler(int sd, short args, void *cbdata)
     prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_DEFINE_PSET;
     int ndaemons = prte_process_info.num_daemons;
     pmix_proc_t daemon_procid;
+    char *assoc_pset_dummy_name = "pmix://assoc_pset_dummy";
+    char *assoc_pset;
 
-    printf("PRRTE Master: Recieved Resource Change request\n");
+    //printf("PRRTE Master: Recieved Resource Change request\n");
     
 
     if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
         scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
         return;
     }
+
+    assoc_pset = (char*) malloc(256);
 
     /* 1. parse the resource change command message */
     for(n=0; n < ninfo; n++){
@@ -1821,7 +1825,17 @@ static void _rchandler(int sd, short args, void *cbdata)
                 return;
             }
         }
+        if(0 == strcmp(info[n].key, PMIX_RC_ASSOC)){
+            
+            strcpy(assoc_pset, info[n].value.data.string);
+            flag = 1;
+        }
     }
+    /* no associated PSet given so use a dummy name */
+    if(flag == 0){
+        strcpy(assoc_pset, assoc_pset_dummy_name);
+    }
+
     free(recv_cmd);
 
     init_add_timing(master_timing_list, &cur_master_timing_frame, sizeof(timing_frame_master_t));
@@ -1857,15 +1871,16 @@ static void _rchandler(int sd, short args, void *cbdata)
     cur_master_timing_frame->res_change_type = rc_type;
     cur_master_timing_frame->res_change_size = rc_nprocs;
         
-    printf("Received resource change '%s' of type %s\n Delta Pset:\n", delta_pset_name, rc_type == PMIX_RES_CHANGE_ADD ? "ADD" : "SUB");
+    //printf("Received resource change '%s' associated with '%s' of type %s\n Delta Pset:\n", delta_pset_name, assoc_pset, rc_type == PMIX_RES_CHANGE_ADD ? "ADD" : "SUB");
+    
     //for(n = 0; n < rc_nprocs; n++){
     //    printf("    [%d: %s]\n", n, PRTE_NAME_PRINT(&delta_procs[n]->name));
     //}
-    printf("--> job size after resource change will be: %d \n\n",job_data->num_procs);
-    char *job_data_string;
-    prte_job_print(&job_data_string, job_data);
-    //printf("%s\n", job_data_string);
-    free(job_data_string);
+    //printf("--> job size after resource change will be: %d \n\n",job_data->num_procs);
+    //char *job_data_string;
+    //prte_job_print(&job_data_string, job_data);
+    ////printf("%s\n", job_data_string);
+    //free(job_data_string);
     
 
     /* 3. Send the 'Define Pset' command for the delta PSet to all daemons */
@@ -1922,7 +1937,7 @@ static void _rchandler(int sd, short args, void *cbdata)
 
     cmd = PRTE_DYNRES_DEFINE_RES_CHANGE;
     pmix_data_buffer_t *buf2;
-    for(n=0; n < ndaemons; n++){
+    for(n = 0; n < ndaemons; n++){
         PMIX_DATA_BUFFER_CREATE(buf2);
         daemon_procid.rank = n;
 
@@ -1930,7 +1945,9 @@ static void _rchandler(int sd, short args, void *cbdata)
 
         ret = PMIx_Data_pack(NULL, buf2, &rc_type, 1, PMIX_UINT8);
         
-        ret = PMIx_Data_pack(NULL, buf2, (void*)&delta_pset_name, 1, PMIX_STRING);
+        ret = PMIx_Data_pack(NULL, buf2, (void*) &delta_pset_name, 1, PMIX_STRING);
+
+        ret = PMIx_Data_pack(NULL, buf2, (void*) &assoc_pset, 1, PMIX_STRING);
         //prte_rml.send_buffer_nb(&daemon_procid, buf2, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
         PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
     }
@@ -1955,6 +1972,7 @@ static void _rchandler(int sd, short args, void *cbdata)
 
     free(delta_procs);
     free(delta_pset_name);
+    free(assoc_pset);
 
     scd->evncbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, scd->cbdata);
     make_timestamp_base(&cur_master_timing_frame->rc_end1);

@@ -373,6 +373,7 @@ PMIX_CLASS_DECLARATION(pmix_server_pset_t);
 typedef struct {
     pmix_list_item_t super;
     char rc_pset[PMIX_MAX_KEYLEN];
+    char associated_pset[PMIX_MAX_KEYLEN];
     pmix_res_change_type_t rc_type;
     size_t nprocs;
     size_t nlocalprocs;

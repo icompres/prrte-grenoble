@@ -228,7 +228,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
             /* add the local peers */
             if (NULL != tmp) {
                 PMIX_INFO_LIST_ADD(ret, iarray, PMIX_LOCAL_PEERS, tmp, PMIX_STRING);
-                printf("LOCAL_PEERS_REGISTER_NSPACE: %s\n", tmp);
+                //printf("LOCAL_PEERS_REGISTER_NSPACE: %s\n", tmp);
                 free(tmp);
             }
             /* if oversubscribed, mark it */
