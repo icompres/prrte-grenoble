@@ -608,7 +608,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
     ninfo = darray.size;
     PMIX_INFO_LIST_RELEASE(info);
     PRTE_PMIX_CONSTRUCT_LOCK(&lock);
-    ret = PMIx_server_register_nspace(pproc.nspace, jdata->num_local_procs, pinfo, ninfo, opcbfunc,
+    ret = PMIx_server_register_nspace(pproc.nspace, nlocalprocs, pinfo, ninfo, opcbfunc,
                                       &lock);
     if (PMIX_SUCCESS != ret) {
         PMIX_ERROR_LOG(ret);
