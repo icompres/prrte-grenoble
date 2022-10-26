@@ -76,7 +76,7 @@ static void _query(int sd, short args, void *cbdata)
     prte_job_t *jdata;
     prte_node_t *node, *ndptr;
     int k, rc;
-    pmix_list_t results, stack;
+    pmix_list_t *results, stack;
     size_t m, n, p;
     uint32_t key, nodeid;
     char **nspaces, *hostname, *uri;
@@ -97,13 +97,19 @@ static void _query(int sd, short args, void *cbdata)
                         "%s processing query",
                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME));
 
-    PMIX_CONSTRUCT(&results, pmix_list_t);
+    //PMIX_CONSTRUCT(&results, pmix_list_t);
+    
+    /* We create an array of result list, one list per query */
+    results = (pmix_list_t*) malloc(cd->nqueries * sizeof(pmix_list_t));
 
     /* see what they wanted */
     for (m = 0; m < cd->nqueries; m++) {
         q = &cd->queries[m];
         hostname = NULL;
         nodeid = UINT32_MAX;
+
+        PMIX_CONSTRUCT(&results[m], pmix_list_t);
+
         /* default to the requestor's jobid */
         PMIX_LOAD_NSPACE(jobid, cd->proct.nspace);
         /* see if they provided any qualifiers */
@@ -163,14 +169,14 @@ static void _query(int sd, short args, void *cbdata)
                 }else if(PMIX_CHECK_KEY(&q->qualifiers[n], PMIX_PSET_NAME)){
                     kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_PSET_NAME, q->qualifiers[n].value.data.string, PMIX_STRING);
-                    pmix_list_append(&results, &kv->super);
+                    pmix_list_append(&results[m], &kv->super);
                 }
             }
             
             /* Append the qualifiers to the results */
             kv = PMIX_NEW(prte_info_item_t);
             PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_QUALIFIERS, qualifiers, PMIX_DATA_ARRAY);
-            pmix_list_append(&results, &kv->super);
+            pmix_list_append(&results[m], &kv->super);
         }
         for (n = 0; NULL != q->keys[n]; n++) {
             prte_output_verbose(2, prte_pmix_server_globals.output,
@@ -196,7 +202,7 @@ static void _query(int sd, short args, void *cbdata)
                 pmix_argv_free(nspaces);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_NAMESPACES, tmp, PMIX_STRING);
                 free(tmp);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_QUERY_NAMESPACE_INFO)) {
                 /* get the current jobids */
                 PMIX_CONSTRUCT(&stack, pmix_list_t);
@@ -234,7 +240,7 @@ static void _query(int sd, short args, void *cbdata)
                 m = pmix_list_get_size(&stack);
                 PMIX_DATA_ARRAY_CREATE(darray, m, PMIX_INFO);
                 kv->info.value.data.darray = darray;
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
                 /* join the results into an array */
                 info = (pmix_info_t *) darray->array;
                 p = 0;
@@ -264,7 +270,7 @@ static void _query(int sd, short args, void *cbdata)
                 pmix_argv_free(ans);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_SPAWN_SUPPORT, tmp, PMIX_STRING);
                 free(tmp);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_QUERY_DEBUG_SUPPORT)) {
                 ans = NULL;
                 pmix_argv_append_nosize(&ans, PMIX_DEBUG_STOP_IN_INIT);
@@ -279,7 +285,7 @@ static void _query(int sd, short args, void *cbdata)
                 pmix_argv_free(ans);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_DEBUG_SUPPORT, tmp, PMIX_STRING);
                 free(tmp);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_HWLOC_XML_V1)) {
                 if (NULL != prte_hwloc_topology) {
                     char *xmlbuffer = NULL;
@@ -302,7 +308,7 @@ static void _query(int sd, short args, void *cbdata)
 #endif
                     PMIX_INFO_LOAD(&kv->info, PMIX_HWLOC_XML_V1, xmlbuffer, PMIX_STRING);
                     free(xmlbuffer);
-                    pmix_list_append(&results, &kv->super);
+                    pmix_list_append(&results[m], &kv->super);
                 }
             } else if (0 == strcmp(q->keys[n], PMIX_HWLOC_XML_V2)) {
                 /* we cannot provide it if we are using v1.x */
@@ -319,14 +325,14 @@ static void _query(int sd, short args, void *cbdata)
                     }
                     PMIX_INFO_LOAD(&kv->info, PMIX_HWLOC_XML_V2, xmlbuffer, PMIX_STRING);
                     free(xmlbuffer);
-                    pmix_list_append(&results, &kv->super);
+                    pmix_list_append(&results[m], &kv->super);
                 }
 #endif
             } else if (0 == strcmp(q->keys[n], PMIX_PROC_URI)) {
                 /* they want our URI */
                 kv = PMIX_NEW(prte_info_item_t);
                 PMIX_INFO_LOAD(&kv->info, PMIX_PROC_URI, prte_process_info.my_hnp_uri, PMIX_STRING);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_SERVER_URI)) {
                 /* they want the PMIx URI */
                 if (NULL != hostname) {
@@ -385,7 +391,7 @@ static void _query(int sd, short args, void *cbdata)
                 kv = PMIX_NEW(prte_info_item_t);
                 PMIX_INFO_LOAD(&kv->info, PMIX_SERVER_URI, uri, PMIX_STRING);
                 free(uri);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_QUERY_PROC_TABLE)) {
                 /* construct a list of values with prte_proc_info_t
                  * entries for each proc in the indicated job */
@@ -402,7 +408,7 @@ static void _query(int sd, short args, void *cbdata)
                 /* setup the reply */
                 kv = PMIX_NEW(prte_info_item_t);
                 (void) strncpy(kv->info.key, PMIX_QUERY_PROC_TABLE, PMIX_MAX_KEYLEN);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
                 /* cycle thru the job and create an entry for each proc */
                 PMIX_DATA_ARRAY_CREATE(darray, jdata->num_procs, PMIX_PROC_INFO);
                 kv->info.value.type = PMIX_DATA_ARRAY;
@@ -448,7 +454,7 @@ static void _query(int sd, short args, void *cbdata)
                 /* setup the reply */
                 kv = PMIX_NEW(prte_info_item_t);
                 (void) strncpy(kv->info.key, PMIX_QUERY_LOCAL_PROC_TABLE, PMIX_MAX_KEYLEN);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
                 /* cycle thru the job and create an entry for each proc */
                 PMIX_DATA_ARRAY_CREATE(darray, jdata->num_local_procs, PMIX_PROC_INFO);
                 kv->info.value.type = PMIX_DATA_ARRAY;
@@ -484,7 +490,7 @@ static void _query(int sd, short args, void *cbdata)
                 kv = PMIX_NEW(prte_info_item_t);
                 sz = pmix_list_get_size(&prte_pmix_server_globals.psets);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_NUM_PSETS, &sz, PMIX_SIZE);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSET_NAMES)) {
                 pmix_server_pset_t *ps;
                 ans = NULL;
@@ -497,7 +503,7 @@ static void _query(int sd, short args, void *cbdata)
                 ans = NULL;
                 kv = PMIX_NEW(prte_info_item_t);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSET_NAMES, tmp, PMIX_STRING);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
                 free(tmp);
             }
             else if( 0 == strcmp(q->keys[n], PMIX_QUERY_PSET_MEMBERSHIP) ){
@@ -529,15 +535,15 @@ static void _query(int sd, short args, void *cbdata)
                 if(flag==0){
                     continue;
                 }else{
-                    if(pmix_list_get_size(&results) > 0){
-                        prte_info_item_t *qual_rm = pmix_list_remove_last(&results);
-                        PMIX_RELEASE(qual_rm);
-                    }
+                    //if(pmix_list_get_size(&results) > 0){
+                    //    prte_info_item_t *qual_rm = pmix_list_remove_last(&results);
+                    //    PMIX_RELEASE(qual_rm);
+                    //}
                     
                     kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSET_MEMBERSHIP, (void**)&data, PMIX_DATA_ARRAY);
                     PMIX_DATA_ARRAY_DESTRUCT(&data);
-                    pmix_list_append(&results, &kv->super);
+                    pmix_list_append(&results[m], &kv->super);
                 }
             }
             /* Query for resource change information */
@@ -626,8 +632,6 @@ static void _query(int sd, short args, void *cbdata)
                 }
 
                 if(NULL == res_change || flag == 0){
-
-                    printf("no res change found matching these requirements\n");
                     continue;
                 }
 
@@ -643,7 +647,7 @@ static void _query(int sd, short args, void *cbdata)
                 }else if (0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
                     PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, res_change->associated_pset, PMIX_STRING);
                 }
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
                 
             //}else if (0 == strcmp(q->keys[n], "PMIX_RC_TYPE")) {
             //    if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
@@ -683,7 +687,7 @@ static void _query(int sd, short args, void *cbdata)
                 (void) strncpy(kv->info.key, PMIX_JOB_SIZE, PMIX_MAX_KEYLEN);
                 key = jdata->num_procs;
                 PMIX_INFO_LOAD(&kv->info, PMIX_JOB_SIZE, &key, PMIX_UINT32);
-                pmix_list_append(&results, &kv->super);
+                pmix_list_append(&results[m], &kv->super);
             } else {
                 fprintf(stderr, "Query for unrecognized attribute: %s\n", q->keys[n]);
             }
@@ -692,28 +696,47 @@ static void _query(int sd, short args, void *cbdata)
 
 done:
     rcd = PMIX_NEW(prte_pmix_server_op_caddy_t);
-    if (PMIX_SUCCESS == ret) {
-        if (0 == pmix_list_get_size(&results)) {
-            ret = PMIX_ERR_NOT_FOUND;
-        } else {
-            if (pmix_list_get_size(&results) < cd->ninfo + 1) {
-                ret = PMIX_QUERY_PARTIAL_SUCCESS;
+    rcd->ninfo = cd->nqueries; //
+    PMIX_INFO_CREATE(rcd->info, rcd->ninfo); //
+
+    for(m = 0; m < cd->nqueries; m++){
+
+        if (PMIX_SUCCESS == ret) {
+            if (0 == pmix_list_get_size(&results[m])) {
+                ret = PMIX_ERR_NOT_FOUND;
             } else {
-                ret = PMIX_SUCCESS;
-            }
-            /* convert the list of results to an info array */
-            rcd->ninfo = pmix_list_get_size(&results);
-            PMIX_INFO_CREATE(rcd->info, rcd->ninfo);
-            n = 0;
-            PMIX_LIST_FOREACH(kv, &results, prte_info_item_t)
-            {
-                PMIX_INFO_XFER(&rcd->info[n], &kv->info);
-                n++;
+
+                if (pmix_list_get_size(&results[m]) < cd->ninfo + 1) {
+                    ret = PMIX_QUERY_PARTIAL_SUCCESS;
+                } else {
+                    ret = PMIX_SUCCESS;
+                }
+                /* The Data Array for the PMIX_QUERY_RESULTS */
+                pmix_data_array_t darray; //
+                PMIX_DATA_ARRAY_CONSTRUCT(&darray, pmix_list_get_size(&results[m]), PMIX_INFO); //
+                /* convert the list of results to an info array */
+                //rcd->ninfo = pmix_list_get_size(&results[m]);
+                //PMIX_INFO_CREATE(rcd->info, rcd->ninfo);
+                /* Copy the results for the m-th query into the results_array*/
+                n = 0;
+                PMIX_LIST_FOREACH(kv, &results[m], prte_info_item_t)
+                {
+                    pmix_info_t *info_array = (pmix_info_t *) darray.array;
+                    PMIX_INFO_XFER(&info_array[n], &kv->info);
+                    n++;
+                }
+                /* Add the PMIX_QUERY_RESULTS Array to the response*/
+                PMIX_INFO_LOAD(&rcd->info[m], PMIX_QUERY_RESULTS, &darray, PMIX_DATA_ARRAY);
+
+                PMIX_DATA_ARRAY_DESTRUCT(&darray);
+
             }
         }
+        PMIX_LIST_DESTRUCT(&results[m]);
+        //PMIX_LIST_DESTRUCT(&results);
     }
-    PMIX_LIST_DESTRUCT(&results);
     cd->infocbfunc(ret, rcd->info, rcd->ninfo, cd->cbdata, qrel, rcd);
+    free(results);
     PMIX_RELEASE(cd);
 }
 
