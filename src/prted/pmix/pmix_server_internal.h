@@ -111,6 +111,7 @@ typedef struct {
     pmix_release_cbfunc_t rlcbfunc;
     pmix_tool_connection_cbfunc_t toolcbfunc;
     pmix_psetop_cbfunc_t psopcbfunc;
+    pmix_info_cbfunc_t infocbfunc;
     void *cbdata;
 } pmix_server_req_t;
 PMIX_CLASS_DECLARATION(pmix_server_req_t);
@@ -361,6 +362,8 @@ PRTE_EXPORT extern void pmix_server_jobid_return(int status, pmix_proc_t *sender
 
 PRTE_EXPORT extern int prte_pmix_server_register_tool(pmix_nspace_t nspace);
 
+PRTE_EXPORT void info_cb_release(void *cbdata);
+
 /* exposed shared variables */
 typedef struct {
     pmix_list_item_t super;
@@ -384,6 +387,12 @@ typedef struct {
 } prte_res_change_t;
 PMIX_CLASS_DECLARATION(prte_res_change_t);
 
+typedef struct {
+    pmix_list_item_t super;
+    char node_name[256];
+    size_t reservation_number;
+} prte_node_reservation_t;
+PMIX_CLASS_DECLARATION(prte_node_reservation_t);
 
 typedef struct {
     bool initialized;
@@ -405,6 +414,7 @@ typedef struct {
     pmix_list_t tools;
     pmix_list_t psets;
     pmix_list_t res_changes;
+    pmix_list_t node_reservations;
 } pmix_server_globals_t;
 
 extern pmix_server_globals_t prte_pmix_server_globals;

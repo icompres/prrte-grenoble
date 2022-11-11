@@ -1749,7 +1749,7 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     memcpy(pset->members, pset_procs, nmembers * sizeof(pmix_proc_t));
     pmix_list_append(&prte_pmix_server_globals.psets, &pset->super);
     /* call the callback function to release th client */
-    pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, &req);
+    pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, (void **) &req);
     pmix_info_t *reply;
     PMIX_INFO_CREATE(reply, 3);
     /* load the procs */
@@ -1782,7 +1782,7 @@ ERROR:
     }
 
     /* we can call the callback to inform the pmix_server about error */
-    pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, &req);
+    pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, (void **) &req);
     req->psopcbfunc(PMIX_ERR_SERVER_FAILED_REQUEST, PMIX_PSETOP_NULL, NULL, 0, req->cbdata, NULL, NULL);
 
 CLEANUP:
@@ -1820,7 +1820,7 @@ void pmix_server_define_res_change(int status, pmix_proc_t *sender, pmix_data_bu
 
     if(NULL == daemon_timing_list)
         daemon_timing_list = (node_t *) calloc(1, sizeof(node_t));
-    init_add_timing(daemon_timing_list, &cur_daemon_timing_frame, sizeof(timing_frame_daemon_t));
+    init_add_timing(daemon_timing_list, (void**) &cur_daemon_timing_frame, sizeof(timing_frame_daemon_t));
     make_timestamp_base(&cur_daemon_timing_frame->rc_publish_start);
     
     /* unpack the type of the resource change */
@@ -2199,6 +2199,137 @@ void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_
     free(rc_pset);
 }
 
+/* Release the client of a PMIx_Allocation_request, providing the results.
+ * This function is triggered by the PRRTE master sending a message with the 'PRTE_DYNRES_ALLOC_REQ_RESPOND' command
+ * The buffer will include the 'room_number' of the request and the 'alloc_id' string.
+ * The results provided to the alloc_cbfunc will at least contain the 'alloc_id', optionally the output PSet names. 
+ */
+void pmix_server_alloc_req_respond(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer, prte_rml_tag_t tg, void *cbdata){
+
+    int ret, room_number, cnt, j, k, m, n;
+    size_t cb_ninfo = 0, ninput = 0, noutput = 0;
+    pmix_server_req_t *req = NULL;
+    pmix_info_t *info_ptr1, *info_ptr2, *cb_info = NULL;
+    pmix_value_t *value_ptr;
+    pmix_data_array_t *darray;
+    prte_pmix_server_op_caddy_t *rcd;
+    char **input_names = NULL, **output_names = NULL, *alloc_id = NULL;
+
+    cnt = 1;
+    /* Get the room number */
+    ret = PMIx_Data_unpack(NULL, buffer, &room_number, &cnt, PMIX_INT);
+    if (PMIX_SUCCESS != ret) {
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+    /* Checkout the according request */
+    pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_number, (void**) &req);
+    if(NULL == req){
+        ret = PMIX_ERR_UNPACK_FAILURE;
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+    
+    /* Get the alloc_id */
+    ret = PMIx_Data_unpack(NULL, buffer, &alloc_id, &cnt, PMIX_STRING);
+    if (PMIX_SUCCESS != ret) {
+        PMIX_ERROR_LOG(ret);
+        goto REPLY;
+    }
+    
+    /* get the input names, to identify the resource change object corresponding to this request 
+     * The input names are a unique signitaure of the resource change as there 
+     * can ALWAYS be only one resource change associated with a Pset.
+     * I.e. The associated Psets of different resource changes are always disjunct 
+     */
+    for(n = 0; n < req->ninfo; n++){
+        if(PMIX_CHECK_KEY(&req->info[n], "mpi.rc_op_handle")){
+            for(k = 0; k < req->info[n].value.data.darray->size; k++){
+                info_ptr1 = (pmix_info_t *) req->info[n].value.data.darray->array;
+                if(PMIX_CHECK_KEY(&info_ptr1[k], "mpi.op_info")){
+                    info_ptr2 = (pmix_info_t *) info_ptr1[k].value.data.darray->array;
+                    
+                    for(m = 0; m < info_ptr2[k].value.data.darray->size; m++){
+                        if(PMIX_CHECK_KEY(&info_ptr2[m], "mpi.op_info.input")){
+                            ninput = info_ptr2[m].value.data.darray->size;
+                            input_names = (char **)  malloc(ninput * sizeof(char*));
+
+                            value_ptr = (pmix_value_t *) info_ptr2[m].value.data.darray->array;
+                            for(j = 0; j < ninput; j++){
+                                input_names[j] = strdup(value_ptr[j].data.string);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* find the corresponding resource change. It should already be defined before the master sends the response command 
+     * If the master provided us the input names we will include the output names in our response
+     */
+    if(NULL != input_names && 0 != ninput){
+
+        prte_res_change_t *res_change;
+        PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+            /* TODO: account for multiple assoc PSets*/
+            if(0 == strcmp(res_change->associated_pset, input_names[0])){
+                output_names = (char **) malloc(sizeof(char*));
+                output_names[0] = strdup(res_change->rc_pset);
+                noutput = 1;
+            }
+        }
+    }
+
+    /* Create the response info objects */
+    if(NULL == output_names || 0 == noutput){
+        ret = PMIX_ERR_NOT_FOUND;
+        cb_ninfo = 1;
+    }else{
+        cb_ninfo = 2;
+    }
+
+    PMIX_INFO_CREATE(cb_info, cb_ninfo);
+    PMIX_INFO_LOAD(&cb_info[0], PMIX_ALLOC_ID, &alloc_id, PMIX_STRING);
+
+    if(1 < cb_ninfo){
+        PMIX_DATA_ARRAY_CREATE(darray, noutput, PMIX_VALUE);
+        value_ptr = (pmix_value_t *) darray->array;
+        for(n = 0; n < noutput; n++){
+            PMIX_VALUE_LOAD(&value_ptr[n], output_names[n], PMIX_STRING);
+        }
+        PMIX_INFO_LOAD(&cb_info[1], "mpi.set_info.output", darray, PMIX_DATA_ARRAY);
+        PMIX_DATA_ARRAY_FREE(darray);
+    }
+
+REPLY:
+    /* Create the info_release_object */
+    rcd = PMIX_NEW(prte_pmix_server_op_caddy_t);
+    rcd->info = cb_info;
+    rcd->ninfo = cb_ninfo;
+
+    /* Call back into the PMIx server*/
+    req->infocbfunc(ret, cb_info, cb_ninfo, req->cbdata, info_cb_release, rcd);
+
+    /* Cleanup */
+    if(NULL != input_names){
+        for(n = 0; n < ninput; n++){
+            free(input_names[n]);
+        }
+        free(input_names);
+    }
+
+    if(NULL != output_names){
+        for(n = 0; n < noutput; n++){
+            free(output_names[n]);
+        }
+        free(output_names);
+    }
+
+    PMIX_RELEASE(req);
+
+}
+
 static char *get_prted_comm_cmd_str(prte_daemon_cmd_flag_t command);
 
 void pmix_server_dynres(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
@@ -2246,9 +2377,10 @@ void pmix_server_dynres(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
     case PRTE_DYNRES_FINALIZE_RES_CHANGE:
         pmix_server_res_change_complete(status, sender, buffer, tg, cbdata);
         break;
+    case PRTE_DYNRES_ALLOC_REQ_RESPOND:
+        pmix_server_alloc_req_respond(status, sender, buffer, tg, cbdata);
     }
     
-
 }
 
 static char *get_prted_comm_cmd_str(prte_daemon_cmd_flag_t command)
@@ -2268,6 +2400,8 @@ static char *get_prted_comm_cmd_str(prte_daemon_cmd_flag_t command)
         return strdup("PRTE_DYNRES_FINALIZE_RES_CHANGE");
     case PRTE_DYNRES_LOCAL_PROCS_FINALIZED:
         return strdup("PRTE_DYNRES_LOCAL_PROCS_FINALIZED");
+    case PRTE_DYNRES_ALLOC_REQ_RESPOND:
+        return strdup("PRTE_DAEMON_ALLOC_REQ_RESPOND");
     }
 
     return NULL;
@@ -2293,15 +2427,13 @@ pmix_status_t pset_operation_fn( const pmix_proc_t *client,
 
     /* unload the pset names */
     for (n = 0; n < ndata; n++) {
-        //printf("unloading value %d: key=%s\n", n, data[n].key);
         if(0 == strcmp(data[n].key, PMIX_PSETOP_P1)){
-            PMIX_VALUE_UNLOAD(rc, &data[n].value, (void**)&pset1_name, &sz);
+            PMIX_VALUE_UNLOAD(rc, (pmix_value_t *) &data[n].value, (void**)&pset1_name, &sz);
         }else if(0 == strcmp(data[n].key, PMIX_PSETOP_P2)){
-            PMIX_VALUE_UNLOAD(rc, &data[n].value, (void**)&pset2_name, &sz);
+            PMIX_VALUE_UNLOAD(rc, (pmix_value_t *) &data[n].value, (void**)&pset2_name, &sz);
         }else if(0 == strcmp(data[n].key, PMIX_PSETOP_PREF_NAME)){
-            PMIX_VALUE_UNLOAD(rc, &data[n].value, (void**)&pset_result_name, &sz);
+            PMIX_VALUE_UNLOAD(rc, (pmix_value_t *) &data[n].value, (void**)&pset_result_name, &sz);
         }
-        //printf("value=%s\n", data[n].value.data.string);
     }
     
     if(pset1_name == NULL || pset2_name == NULL){
@@ -2360,8 +2492,8 @@ pmix_status_t pset_operation_fn( const pmix_proc_t *client,
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
-    //printf("send pset op\n");
-    //prte_rml.send_buffer_nb(PRTE_PROC_MY_HNP, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+
+    /* Send the message to our HNP for processing */
     PRTE_RML_SEND(ret, PRTE_PROC_MY_HNP->rank, buf, PRTE_RML_TAG_MALLEABILITY);
 
     /* We have successfully sent the request to the master. 
@@ -2370,12 +2502,11 @@ pmix_status_t pset_operation_fn( const pmix_proc_t *client,
     goto CLEANUP;
        
 ERROR:
-    //printf("error\n");
     /* if we encountered an error directly callback the pmix server with an error status */    
     cbfunc(PMIX_ERR_SERVER_FAILED_REQUEST, PMIX_PSETOP_NULL, NULL, 0, cbdata, NULL, NULL);
 
 CLEANUP:
-    //printf("cleanup\n");
+
     if(NULL != pset_result_name){
         free(pset_result_name);
     }
@@ -2388,7 +2519,7 @@ CLEANUP:
     if(NULL != info){
         PMIX_INFO_FREE(info, 3);
     }
-    //printf("return success\n");
+
     return PMIX_SUCCESS;
 }
 

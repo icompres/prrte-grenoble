@@ -503,6 +503,15 @@ static void eviction_cbfunc(struct pmix_hotel_t *hotel, int room_num, void *occu
     PMIX_RELEASE(req);
 }
 
+void info_cb_release(void *cbdata)
+{
+    prte_pmix_server_op_caddy_t *cd = (prte_pmix_server_op_caddy_t *) cbdata;
+    if (NULL != cd->info) {
+        PMIX_INFO_FREE(cd->info, cd->ninfo);
+    }
+    PMIX_RELEASE(cd);
+}
+
 
 void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
                        const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
@@ -658,6 +667,7 @@ int pmix_server_init(void)
     PMIX_CONSTRUCT(&prte_pmix_server_globals.reqs, pmix_hotel_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.psets, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.res_changes, pmix_list_t);
+    PMIX_CONSTRUCT(&prte_pmix_server_globals.node_reservations, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.tools, pmix_list_t);
     PMIX_CONSTRUCT(&prte_pmix_server_globals.local_reqs, pmix_pointer_array_t);
     pmix_pointer_array_init(&prte_pmix_server_globals.local_reqs, 128, INT_MAX, 2);
@@ -1029,6 +1039,7 @@ void pmix_server_finalize(void)
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.notifications);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.psets);
     PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.res_changes);
+    PMIX_LIST_DESTRUCT(&prte_pmix_server_globals.node_reservations);
 
     /* shutdown the local server */
     prte_pmix_server_globals.initialized = false;
@@ -1723,7 +1734,7 @@ static void psdes(pmix_server_pset_t *p)
 }
 PMIX_CLASS_INSTANCE(pmix_server_pset_t, pmix_list_item_t, pscon, psdes);
 PMIX_CLASS_INSTANCE(prte_res_change_t, pmix_list_item_t, NULL, NULL);
-
+PMIX_CLASS_INSTANCE(prte_node_reservation_t, pmix_list_item_t, NULL, NULL);
 
 static void tlcon(prte_pmix_tool_t *p)
 {

@@ -223,6 +223,8 @@ typedef void (*prte_rml_buffer_callback_fn_t)(int status, pmix_proc_t *peer,
 /* tag for malleability support */
 #define PRTE_RML_TAG_MALLEABILITY 72
 
+/* tag for services provided by master */
+#define PRTE_RML_TAG_MASTER 73
 
 #define PRTE_RML_TAG_MAX 100
 

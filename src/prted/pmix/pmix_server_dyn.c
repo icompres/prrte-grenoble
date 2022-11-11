@@ -1271,6 +1271,72 @@ pmix_status_t pmix_server_alloc_fn(const pmix_proc_t *client, pmix_alloc_directi
                                    const pmix_info_t data[], size_t ndata,
                                    pmix_info_cbfunc_t cbfunc, void *cbdata)
 {
-    /* PRTE currently has no way of supporting allocation requests */
-    return PMIX_ERR_NOT_SUPPORTED;
+    int n, room_num;
+    pmix_status_t ret;
+    pmix_server_req_t *req = NULL;
+    pmix_data_buffer_t *buf = NULL;
+
+    prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_ALLOC_REQ_PROCESS;
+    
+
+    PMIX_DATA_BUFFER_CREATE(buf);
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &cmd, 1, PMIX_UINT8))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, (void*) client, 1, PMIX_PROC))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &ndata, 1, PMIX_SIZE))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, (void*) data, ndata, PMIX_INFO))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+
+    req = PMIX_NEW(pmix_server_req_t);
+    req->infocbfunc = cbfunc;
+    req->cbdata = cbdata;
+    req->ninfo = ndata;
+
+    PMIX_INFO_CREATE(req->info, ndata);
+    for(n = 0; n < ndata; n++){
+        PMIX_INFO_XFER(&req->info[n], &data[n]);
+    }
+
+    if(PMIX_SUCCESS != (ret = pmix_hotel_checkin(&prte_pmix_server_globals.reqs, req, &room_num))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &room_num, 1, PMIX_INT))){
+        pmix_hotel_checkout(&prte_pmix_server_globals.reqs, room_num);
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    /* Send it to the master for processing: prte.c -> prte_master_process_alloc_req() */
+    PRTE_RML_SEND(ret, PRTE_PROC_MY_HNP->rank, buf, PRTE_RML_TAG_MASTER);
+    if (PRTE_SUCCESS != ret) {
+        pmix_hotel_checkout(&prte_pmix_server_globals.reqs, room_num);
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    return PMIX_SUCCESS;
+
+ ERROR:
+    if(NULL != buf){
+        PMIX_DATA_BUFFER_RELEASE(buf);
+    }
+    if(NULL != req){
+        PMIX_RELEASE(req);
+    }
+    cbfunc(ret, NULL, 0, cbdata, NULL, NULL);
+    return PMIX_SUCCESS;
 }

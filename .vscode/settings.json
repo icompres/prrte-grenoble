@@ -3,6 +3,8 @@
         "array": "c",
         "string_view": "c",
         "initializer_list": "c",
-        "utility": "c"
+        "utility": "c",
+        "prte_globals.h": "c",
+        "pmix_server_internal.h": "c"
     }
 }

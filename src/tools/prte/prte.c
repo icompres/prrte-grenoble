@@ -114,7 +114,8 @@ typedef struct {
 pmix_rank_t highest_rank_global = 6; 
 
 
-static int res_change_cnt=0;
+static int res_change_cnt = 0;
+static size_t cur_alloc_reservation_number = 0;
 static pmix_nspace_t spawnednspace;
 static pmix_proc_t myproc;
 static bool signals_set = false;
@@ -137,6 +138,8 @@ static void rchandler(size_t evhdlr_registration_id, pmix_status_t status,
                        const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
                        pmix_info_t results[], size_t nresults,
                        pmix_event_notification_cbfunc_fn_t cbfunc, void *cbdata);
+void prte_master_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
+                      prte_rml_tag_t tag, void *cbdata);
 
 static void opcbfunc(pmix_status_t status, void *cbdata)
 {
@@ -1076,6 +1079,11 @@ int main(int argc, char *argv[])
     /* register the resource change cmd handler */
     pmix_status_t rc_define = PMIX_RC_DEFINE;
     PMIx_Register_event_handler(&rc_define, 1, NULL, 0, rchandler, NULL, NULL);
+
+
+    /* Listen for special commands send to the master */
+    PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_MASTER,
+              PRTE_RML_PERSISTENT, prte_master_recv, NULL);
     
     /* create a pset for the job */
     pmix_data_buffer_t *buf;
@@ -1109,6 +1117,11 @@ int main(int argc, char *argv[])
     }
     free(pset_name);
     //printf("\nPRRTE HNP Server pid:\n %lu\n\n", (unsigned long) getpid());
+    char hostname[256];
+    gethostname(hostname, 256);
+    FILE *f = fopen("/opt/hpc/build/examples/tests/hnp", "a");
+    fprintf(f, "Proc %s: pid: %lu, host: %s\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned long)getpid(), hostname);
+    fclose(f);
 
     /* Initialize the master timing list */
     master_timing_list = (node_t *)calloc(1, sizeof(node_t));
@@ -1368,7 +1381,70 @@ static void epipe_signal_callback(int fd, short args, void *cbdata)
 }
 
 
-/* Resource Changes */
+
+/* Resource changes */
+typedef struct _info_release_cbdata{
+    pmix_info_t *info;
+    size_t ninfo;
+}info_release_cbdata;
+
+void info_release_fn(void *cbdata){
+    info_release_cbdata * info_cbdata = (info_release_cbdata *)cbdata;
+    if(NULL != info_cbdata->info){
+        PMIX_INFO_FREE(info_cbdata->info, info_cbdata->ninfo);
+    }
+    free(info_cbdata);
+}
+
+void reserve_node(prte_node_t *node, size_t reservation_number){
+    prte_node_reservation_t *node_reservation;
+    node_reservation = PMIX_NEW(prte_node_reservation_t);
+    strcpy(node_reservation->node_name, node->name);
+    node_reservation->reservation_number = reservation_number;
+    pmix_list_append(&prte_pmix_server_globals.node_reservations, &node_reservation->super);
+}
+
+void surrender_node(prte_node_t *node){
+    prte_node_reservation_t *node_reservation, *nr_next;
+    PMIX_LIST_FOREACH_SAFE(node_reservation, nr_next, &prte_pmix_server_globals.node_reservations, prte_node_reservation_t){
+        if(0 == strcmp(node_reservation->node_name, node->name)){
+            pmix_list_remove_item(&prte_pmix_server_globals.node_reservations, &node_reservation->super);
+            PMIX_RELEASE(node_reservation);
+            return;
+        }
+    }
+}
+void surrender_reservation(size_t reservation_number){
+    prte_node_reservation_t *node_reservation, *nr_next;
+    PMIX_LIST_FOREACH_SAFE(node_reservation, nr_next, &prte_pmix_server_globals.node_reservations, prte_node_reservation_t){
+        if(node_reservation->reservation_number == reservation_number){
+            pmix_list_remove_item(&prte_pmix_server_globals.node_reservations, &node_reservation->super);
+            PMIX_RELEASE(node_reservation);
+        }
+    }
+}
+
+bool node_reserved(prte_node_t *node){
+    prte_node_reservation_t *node_reservation;
+    PMIX_LIST_FOREACH(node_reservation, &prte_pmix_server_globals.node_reservations, prte_node_reservation_t){
+        if(0 == strcmp(node_reservation->node_name, node->name)){
+            return true;
+        }
+    }
+    return false;
+}
+
+bool node_reserved_by_number(prte_node_t *node, size_t reservation_number){
+    prte_node_reservation_t *node_reservation;
+    PMIX_LIST_FOREACH(node_reservation, &prte_pmix_server_globals.node_reservations, prte_node_reservation_t){
+        if(0 == strcmp(node_reservation->node_name, node->name) && node_reservation->reservation_number == reservation_number){
+            return true;
+        }
+    }
+    return false;
+}
+
+
 static pmix_status_t parse_rc_cmd(char *cmd, pmix_res_change_type_t *_rc_type, size_t *nprocs){
 
     char * token= strtok(cmd, " ");
@@ -1393,7 +1469,7 @@ static pmix_status_t parse_rc_cmd(char *cmd, pmix_res_change_type_t *_rc_type, s
  * We use this job data object in the launch process.
  * THE ACTUAL JOB DATA IS UPDATED AT THE PRTE MASTER!
  */
-static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc_t ***_delta_procs){
+static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc_t ***_delta_procs, size_t reservation_number){
     
     size_t n;
     prte_proc_t *proc;
@@ -1435,7 +1511,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
     }
 
     /* Iterate over the nodes and add processes where possible */
-    prte_node_t **job_nodes = job_data->map->nodes->addr; 
+    prte_node_t **job_nodes = (prte_node_t **) job_data->map->nodes->addr; 
     size_t proc_index = 0, node_index, daemon_index;
 
     while(proc_index < rc_nprocs){
@@ -1444,6 +1520,10 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
         /* first fill up nodes allocated to the job */
         for(node_index = 0; node_index < job_data->map->nodes->size; node_index++){
             if(NULL == (node = job_nodes[node_index])){
+                continue;
+            }
+            /* This node is already reserved for another allocation request*/
+            if(node_reserved(node) && ! node_reserved_by_number(node, reservation_number)){
                 continue;
             }
 
@@ -1502,6 +1582,13 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
                     continue;
                 }
 
+                /* This node is already reserved for another allocation request*/
+                if(node_reserved(dnode) && ! node_reserved_by_number(dnode, reservation_number)){
+                    printf("reservation error\n");
+                    exit(1);
+                    continue;
+                }
+
                 /* Do we already have this node in our job? */
                 already_allocated = false;
                 for(node_index = 0; node_index < job_data->map->nodes->size; node_index++){
@@ -1536,7 +1623,7 @@ static void setup_resource_add(prte_job_t *job_data, size_t rc_nprocs, prte_proc
 
     }
 
-    /* TODO: cleanly exit res_change handler */
+    /* TODO: cleanly exit res_change handler. NOTE: This should not happen as we check and reserve the resources before */
     if(proc_index < rc_nprocs){
         printf("Not enough nodes/slots available for this request.\n");
     }
@@ -1681,7 +1768,7 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
 
     /* We traverse the list of nodes and their procs in reverse order and choose the ones of our job */
     prte_app_context_t *app = job_data_cpy->apps->addr[0]; //FIXME: multi-app
-    prte_node_t **job_nodes = job_data_cpy->map->nodes->addr; // or should we use dvm nodes?
+    prte_node_t **job_nodes = (prte_node_t **) job_data_cpy->map->nodes->addr; // or should we use dvm nodes?
     
     size_t proc_index = 0;
     for(node_index = job_data_cpy->map->nodes->size - 1; node_index >= 0; node_index--){
@@ -1762,7 +1849,7 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
     job_data_cpy->num_procs -= rc_nprocs;
     app->num_procs -= rc_nprocs;
 
-    /* TODO: Need to respect procs from other jobs */
+    /* TODO: Need to respect procs from other jobs as well as remove nodes from job */
     //job_data_cpy->map->num_nodes -= rm_nodes;
 
     
@@ -1776,6 +1863,53 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
     PMIx_Data_pack(NULL, &job_data_cpy->launch_msg, &command, 1, PMIX_UINT8);
 }
 
+/* Step 4: Send the alloc response command to the requesting daemon -> pmix_server_gen.c*/
+void alloc_response_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninfo, void *cbdata, pmix_release_cbfunc_t release_fn, void *release_cbdata){
+
+    int n, ret, room_number, length;
+    size_t reservation_number;
+    char * alloc_id = NULL;
+    info_release_cbdata * info_cbdata = (info_release_cbdata *)cbdata;
+    pmix_data_buffer_t *buffer;
+    
+    pmix_proc_t *receiver;
+    prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_ALLOC_REQ_RESPOND;
+    
+    /* Get the required info to pack the buffer */
+    for(n = 0; n < info_cbdata->ninfo; n++){
+        if(PMIX_CHECK_KEY(&info_cbdata->info[n], "prte.hotel.room_number")){
+            room_number = info_cbdata->info[n].value.data.integer;
+        }
+        if(PMIX_CHECK_KEY(&info_cbdata->info[n], "prte.alloc.requestor")){
+            receiver = info_cbdata->info[n].value.data.proc;
+        }
+        if(PMIX_CHECK_KEY(&info_cbdata->info[n], "prte.alloc.reservation_number")){
+            reservation_number = info_cbdata->info[n].value.data.size;
+        }
+    }
+
+    /* Convert the reservation_number to string to be used as alloc_id */
+    length = snprintf( NULL, 0, "%zu", reservation_number );
+    alloc_id = malloc( length + 1 );   
+    snprintf( alloc_id, length + 1, "%zu", reservation_number);
+
+    /* Pack the buffer */
+    PMIX_DATA_BUFFER_CREATE(buffer);
+    PMIx_Data_pack(receiver, buffer, &cmd, 1, PMIX_UINT8);
+    PMIx_Data_pack(receiver, buffer, &room_number, 1, PMIX_INT);
+    PMIx_Data_pack(receiver, buffer, &alloc_id, 1, PMIX_STRING);
+    
+    /* Send alloc response command to daemon -> pmix_server_gen.c */
+    PRTE_RML_SEND(ret, receiver->rank, buffer, PRTE_RML_TAG_MALLEABILITY);
+
+    /* Free the callback data (also frees the input info objects)*/
+    if(NULL != info_cbdata->info){
+        PMIX_INFO_FREE(info_cbdata->info, info_cbdata->ninfo);
+    }
+    free(alloc_id);
+    free(info_cbdata);
+}
+
 /* Callback for resource change requests 
  * 1. Parse the request
  * 2. Create/Adjust job data and create delta PSet
@@ -1787,9 +1921,10 @@ static void setup_resource_sub(pmix_nspace_t job, prte_job_t *job_data_cpy, size
 static void _rchandler(int sd, short args, void *cbdata)
 {
     prte_pmix_server_op_caddy_t *scd = (prte_pmix_server_op_caddy_t *) cbdata;
-    pmix_info_t *info = scd->info;
+    pmix_info_t *info = scd->info, *info_rc_op_handle, *info_ptr, *info_ptr2, *info_ptr3;
+    pmix_value_t *value_ptr;
     size_t ninfo = scd->ninfo;
-    size_t n, i, ret, sz, rc_nprocs, flag = 0;
+    size_t n, i, k, m, ret, sz, rc_nprocs, reservation_number = 0, flag = 0;
     pmix_status_t rc=PMIX_SUCCESS;
     char *recv_cmd = NULL;
     char *delta_pset_name;
@@ -1798,12 +1933,16 @@ static void _rchandler(int sd, short args, void *cbdata)
     prte_grpcomm_signature_t *sig;
     prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_DEFINE_PSET;
     int ndaemons = prte_process_info.num_daemons;
-    pmix_proc_t daemon_procid;
+    pmix_proc_t daemon_procid, client, *client_ptr;
     char *assoc_pset_dummy_name = "pmix://assoc_pset_dummy";
     char *assoc_pset;
 
+    PMIX_PROC_CONSTRUCT(&client);
+    PMIX_LOAD_PROCID(&client, spawnednspace, PMIX_RANK_UNDEF);
+    client_ptr = &client;
+
     //printf("PRRTE Master: Recieved Resource Change request\n");
-    
+ 
 
     if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
         scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
@@ -1813,7 +1952,7 @@ static void _rchandler(int sd, short args, void *cbdata)
     assoc_pset = (char*) malloc(256);
 
     /* 1. parse the resource change command message */
-    for(n=0; n < ninfo; n++){
+    for(n = 0; n < ninfo; n++){
         if(0 == strcmp(info[n].key, "PMIX_RC_CMD")){
             PMIX_VALUE_UNLOAD(rc, &info[n].value, (void**)&recv_cmd, &sz);
             //prte_output(2, "SERVER: RECEIVED RC_CMD %s\n", recv_cmd);
@@ -1824,32 +1963,85 @@ static void _rchandler(int sd, short args, void *cbdata)
                 scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
                 return;
             }
+            free(recv_cmd);
         }
-        if(0 == strcmp(info[n].key, PMIX_RC_ASSOC)){
+        else if(0 == strcmp(info[n].key, PMIX_RC_ASSOC)){
             
             strcpy(assoc_pset, info[n].value.data.string);
             flag = 1;
         }
+        else if(PMIX_CHECK_KEY(&info[n], "mpi.rc_op_handle")){
+            info_rc_op_handle = &info[n];
+
+            info_ptr = (pmix_info_t *) info_rc_op_handle->value.data.darray->array;
+
+            rc_type = info_ptr[0].value.data.uint8;
+
+            for(i = 0; i < info_rc_op_handle->value.data.darray->size; i++){
+                if(PMIX_CHECK_KEY(&info_ptr[i], PMIX_RC_TYPE)){
+
+                    rc_type = info_ptr[i].value.data.uint8;
+
+                }else if(PMIX_CHECK_KEY(&info_ptr[i], "mpi.op_info")){
+
+                    info_ptr2 = (pmix_info_t *) info_ptr[i].value.data.darray->array;
+                    for(k = 0; k < info_ptr[i].value.data.darray->size; k++){
+
+                        if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.info")){
+
+                            info_ptr3 = (pmix_info_t *) info_ptr2[k].value.data.darray->array;
+                            for(m = 0; m < info_ptr2[k].value.data.darray->size; m++){
+
+                                if(PMIX_CHECK_KEY(&info_ptr3[m], "mpi.op_info.info.num_procs")){
+                                    
+                                    sscanf(info_ptr3[m].value.data.string, "%zu", &rc_nprocs);
+                                }
+                            }
+                        }
+                        if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.input")){
+                            value_ptr = (pmix_value_t *) info_ptr2[k].value.data.darray->array;
+                            strcpy(assoc_pset, value_ptr[0].data.string);
+                            flag = 1;
+                        }
+                    }
+                }
+            }
+        }
+        else if(PMIX_CHECK_KEY(&info[n], "prte.alloc.client")){
+            client_ptr = info[n].value.data.proc;
+        }
+        else if(PMIX_CHECK_KEY(&info[n], "prte.alloc.reservation_number")){
+            reservation_number = info[n].value.data.size;
+        }
+        /* get the reservation number */
+
+        /* get the client proc */
     }
+    printf("have read values: assoc_pset -> %s, rc_type -> %d, num_procs ->%d, client.nspace-> %s, client.rank -> %d, reservation_number -> %d\n", assoc_pset, rc_type, rc_nprocs, client.nspace, client.rank, reservation_number);
+    
     /* no associated PSet given so use a dummy name */
     if(flag == 0){
         strcpy(assoc_pset, assoc_pset_dummy_name);
     }
 
-    free(recv_cmd);
-
-    init_add_timing(master_timing_list, &cur_master_timing_frame, sizeof(timing_frame_master_t));
+    init_add_timing(master_timing_list, (void **) &cur_master_timing_frame, sizeof(timing_frame_master_t));
     make_timestamp_base(&cur_master_timing_frame->rc_start);
 
 
     /* get the job data object & do a sanity check */
-    prte_job_t *cur_job_data = prte_get_job_data_object(spawnednspace);
+    prte_job_t *cur_job_data = prte_get_job_data_object(client_ptr->nspace);
     if(rc_type == PMIX_RES_CHANGE_SUB && rc_nprocs >= cur_job_data->num_procs){
-        scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
+        if(NULL != scd->evncbfunc){
+            scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, scd->cbdata);
+        }
+        /* This callback will send a response to the requesting daemon*/
+        if(NULL != scd->infocbfunc){
+            scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, scd->cbdata, NULL, NULL);
+        }
         return;
     }
-
-    /* 2. create the delta pset and update the job_data */
+    
+    /* 2. create the delta pset and update the job_data (Currently defaulting to the job data of the requestor. ) */
 
     make_timestamp_base(&cur_master_timing_frame->jdata_start);
 
@@ -1859,18 +2051,18 @@ static void _rchandler(int sd, short args, void *cbdata)
     sprintf(delta_pset_name, "rc%d", res_change_cnt++);
 
     if(rc_type == PMIX_RES_CHANGE_ADD){
-        job_data = prte_get_job_data_object(spawnednspace);
-        setup_resource_add(job_data, rc_nprocs, &delta_procs);
+        job_data = prte_get_job_data_object(client_ptr->nspace);
+        setup_resource_add(job_data, rc_nprocs, &delta_procs, reservation_number);
     }else if (rc_type == PMIX_RES_CHANGE_SUB){
         job_data = PMIX_NEW(prte_job_t);
-        setup_resource_sub(spawnednspace, job_data, rc_nprocs, &delta_procs);
+        setup_resource_sub(client_ptr->nspace, job_data, rc_nprocs, &delta_procs);
     }
-
+    
     make_timestamp_base(&cur_master_timing_frame->jdata_end);
     set_res_change_id(&cur_master_timing_frame->res_change_id, delta_pset_name);
     cur_master_timing_frame->res_change_type = rc_type;
     cur_master_timing_frame->res_change_size = rc_nprocs;
-        
+      
     //printf("Received resource change '%s' associated with '%s' of type %s\n Delta Pset:\n", delta_pset_name, assoc_pset, rc_type == PMIX_RES_CHANGE_ADD ? "ADD" : "SUB");
     
     //for(n = 0; n < rc_nprocs; n++){
@@ -1883,7 +2075,7 @@ static void _rchandler(int sd, short args, void *cbdata)
     //free(job_data_string);
     
 
-    /* 3. Send the 'Define Pset' command for the delta PSet to all daemons */
+    /* 3. Send the 'Define Pset' command for the delta PSet to all daemons and publish the provided pset info */
     make_timestamp_base(&cur_master_timing_frame->pset_start);
 
     PMIX_LOAD_PROCID(&daemon_procid, PRTE_PROC_MY_HNP->nspace, 0);
@@ -1899,9 +2091,11 @@ static void _rchandler(int sd, short args, void *cbdata)
             PMIX_PROC_LOAD(&pset_proc, prte_proc->name.nspace, prte_proc->name.rank);
             ret = PMIx_Data_pack(NULL, buf, &pset_proc, 1, PMIX_PROC);
         }
-        //prte_rml.send_buffer_nb(&daemon_procid, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+
         PRTE_RML_SEND(ret, daemon_procid.rank, buf, PRTE_RML_TAG_MALLEABILITY);
     }
+
+    /* 3b) Execute all set operations specified by the request and publish the provided pset info */
 
     /* 4. retrieve the data needed by the launcher" && send "launch" command to 
      * When removing procs we need to do this before we make the query info available
@@ -1931,7 +2125,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         /* maintain accounting */
         PMIX_RELEASE(sig);
     }
-
+      
      /* 5. Inform daemons about res change so they can answer related queries */      
     make_timestamp_base(&cur_master_timing_frame->rc_publish_start);
 
@@ -1952,7 +2146,7 @@ static void _rchandler(int sd, short args, void *cbdata)
         PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
     }
 
-
+    
     make_timestamp_base(&cur_master_timing_frame->apply_start); 
 
     /* 6. retrieve the data needed by the launcher && send launch command to daemons
@@ -1970,14 +2164,25 @@ static void _rchandler(int sd, short args, void *cbdata)
     //    PMIX_RELEASE(job_data);
     //}
 
+    surrender_reservation(reservation_number);
+
     free(delta_procs);
     free(delta_pset_name);
     free(assoc_pset);
+    
+    
+    if(NULL != scd->evncbfunc){
+        scd->evncbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, scd->cbdata);
+    }
+    /* This callback will send a response to the requesting daemon*/
+    if(NULL != scd->infocbfunc){
+        scd->infocbfunc(PMIX_SUCCESS, NULL, 0, scd->cbdata, NULL, NULL);
+    }
 
-    scd->evncbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, scd->cbdata);
     make_timestamp_base(&cur_master_timing_frame->rc_end1);
     
 }
+
 
 static void rchandler(size_t evhdlr_registration_id, pmix_status_t status,
                        const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
@@ -1997,6 +2202,315 @@ static void rchandler(size_t evhdlr_registration_id, pmix_status_t status,
     prte_event_set_priority(&(cd->ev), PRTE_MSG_PRI);
     PMIX_POST_OBJECT(cd);
     prte_event_active(&(cd->ev), PRTE_EV_WRITE, 1);
+
+}
+
+/* Step 3: execute the resource change
+ * The callback function needs to be called in the end to respond to the requesting daemon. 
+ * The cbdata is the buffer to be sent to the daemon, i.e. [0]: the daemon id [1]: the room_number
+ * The status indicates the result of the execution */
+static void execute_resource_change(pmix_status_t status, pmix_proc_t *proc, pmix_info_t info[], size_t ninfo, pmix_info_cbfunc_t cbfunc, void *cbdata){
+    prte_pmix_server_op_caddy_t *cd;
+
+    /* If the allocation wasn't successful directly send an answer to the requesting daemon 
+     * no release_func needed as the info objects are included in the cbdata anyways
+     */
+    if(PMIX_SUCCESS != status){
+        if(NULL != cbfunc){
+            cbfunc(status, info, ninfo, cbdata, NULL, NULL);
+        }
+        return;
+    }
+
+    cd = PMIX_NEW(prte_pmix_server_op_caddy_t);
+    cd->proc = *proc;
+    cd->ev.ev_base = prte_event_base;
+    cd->codes = &status;
+    cd->ncodes = 1;
+    cd->info = (pmix_info_t *) info;
+    cd->ninfo = ninfo;
+    cd->infocbfunc = cbfunc;
+    cd->cbdata = cbdata;
+    cd->evncbfunc = NULL;
+    prte_event_set(prte_event_base, &(cd->ev), -1, PRTE_EV_WRITE, _rchandler, cd);
+    prte_event_set_priority(&(cd->ev), PRTE_MSG_PRI);
+    PMIX_POST_OBJECT(cd);
+    prte_event_active(&(cd->ev), PRTE_EV_WRITE, 1);
+}
+
+
+/* Step 2: The PMIX_allocation_request_nb callback function - We do not provide info, but the scheduler should 
+ * It 
+ *      -   processes the new resources - if any - and 
+ *      -   calls 'execute_resource_change' to execute the resource change according to the infos in the cbdata
+ *      -   provides the alloc_response_cbfunc to be executed afterwars to respond to the requesing daemon
+ */
+void alloc_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninfo, void *cbdata, pmix_release_cbfunc_t release_fn, void *release_cbdata){
+
+    int n, i, ret, num_new_nodes, n_cbinfo;
+    char **new_nodes = NULL;
+    prte_node_t *node_ptr;
+    pmix_data_buffer_t *buffer;
+    pmix_info_t *next_info, *cbinfo;
+
+    info_release_cbdata *icbdata = (info_release_cbdata *) cbdata;
+    cbinfo = icbdata->info;
+    n_cbinfo = icbdata->ninfo;
+
+
+    /* Step 1: infos might include new resources to be added to the node pool */
+    if(PMIX_SUCCESS == (ret = status) && 0 < ninfo){
+        for(n = 0; n < ninfo; n++){
+            if(PMIX_CHECK_KEY(&info[n], PMIX_NODE_LIST)){
+                pmix_argv_split(info[n].value.data.string, ',');
+                break;
+            }
+        }
+
+        if(NULL == new_nodes){
+            ret = PMIX_ERR_UNPACK_FAILURE;
+            goto EXECUTE;
+        }
+
+        PMIX_ARGV_COUNT(num_new_nodes, new_nodes);
+
+        for(n = 0; n < ninfo; n++){
+            node_ptr = PMIX_NEW(prte_node_t);
+            node_ptr->name = strdup(new_nodes[n]);
+
+            /* Prep node for usage in job */
+
+
+            /* Add this node to the node_pool */
+            pmix_pointer_array_add(prte_node_pool, (void*) node_ptr);
+        }
+        pmix_argv_free(new_nodes);
+    }
+
+
+    /* Step 2: Execute the resource change 
+     * (we might check the resource pool again in case of a negative response from the scheduler, as the node pool could have changed in the meantime) */
+    
+    /* The requestor id and the room number need to be included in the callback data buffer
+     * The mpi_rc_info_handle and the reservation_number need to be included in the info array 
+     * We provide all of them in the cbdata and reference the info in the info parameter, so it just gets release all at once
+     */
+EXECUTE:
+
+    execute_resource_change(ret, PRTE_PROC_MY_NAME, cbinfo, n_cbinfo, alloc_response_cbfunc, cbdata);
+
+    if(NULL != release_fn){
+        release_fn(release_cbdata);
+    }
+
+
+}
+
+/* Step 1:  A daemon has sent a resource allocation request to the master 
+ *          -   Analyze the request to determine if we need to request more resources from the RM
+ *          -   If required, reserve any nodes we can provide from our node pool
+ *          -   Either dirctly call the PMIx_Allocation_request_nb callbaack (alloc_cb) function
+ *              or send a PMIx_Allocation_request to the RM (with alloc_cb callback)
+ */
+void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer, prte_rml_tag_t tag, void *cbdata){
+    
+    int ret, room_number, n, m, k, ninfo_int;
+
+    uint8_t rc_type;
+
+    size_t ninfo, sz, reservation_number, num_procs, slots = 0, free_slots_in_job = 0;
+    pmix_info_t *info = NULL, *info_rc_op_handle = NULL, *info_ptr, *info_ptr2, *info_ptr3, *alloc_info, *cb_info;
+
+    pmix_proc_t client;
+    prte_node_t *node;
+    prte_job_t *jdata;
+    prte_job_map_t *map;
+
+    /* Increment the current reservation number. This will be the reservation number for this resource change as well as the alloc id */
+    reservation_number = ++cur_alloc_reservation_number;
+
+
+    /* Setp 1: UNLOAD buffer */
+    n = 1;
+    /* Unload the client proc */
+    if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &client, &n, PMIX_PROC))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    /* Unload the number of info objects */
+    if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &ninfo, &n, PMIX_SIZE))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    /* Unload the info objects */
+    PMIX_INFO_CREATE(info, ninfo);
+    ninfo_int = (int) ninfo;
+    if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, info, &ninfo_int, PMIX_INFO))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    /* Unload the room number */
+    if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &room_number, &n, PMIX_INT))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    /* Step 2: Analyze the request they've sent us 
+     * -> i.e.: rc_type & num_procs 
+     */
+    for(n = 0; n < ninfo; n++){
+        if(PMIX_CHECK_KEY(&info[n], "mpi.rc_op_handle")){
+            info_rc_op_handle = &info[n];
+            break;
+        }
+    }
+
+    if(NULL == info_rc_op_handle){
+        ret = PMIX_ERR_BAD_PARAM;
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
+    info_ptr = (pmix_info_t *) info_rc_op_handle->value.data.darray->array;
+
+    rc_type = info_ptr[0].value.data.uint8;
+
+    for(n = 0; n < info_rc_op_handle->value.data.darray->size; n++){
+
+        if(PMIX_CHECK_KEY(&info_ptr[n], PMIX_RC_TYPE)){
+            rc_type = info_ptr[n].value.data.uint8;
+        }else if(PMIX_CHECK_KEY(&info_ptr[n], "mpi.op_info")){            
+            info_ptr2 = (pmix_info_t *) info_ptr[n].value.data.darray->array;
+
+            for(k = 0; k < info_ptr[n].value.data.darray->size; k++){
+                if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.info")){
+                    info_ptr3 = (pmix_info_t *) info_ptr2[k].value.data.darray->array;
+
+                    for(m = 0; m < info_ptr2[k].value.data.darray->size; m++){
+                        if(PMIX_CHECK_KEY(&info_ptr3[m], "mpi.op_info.info.num_procs")){
+                            sscanf(info_ptr3[m].value.data.string, "%zu", &num_procs);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* TODO: Do more analysis. E.g. go over all set oeprations and aggregate the required resources */
+
+
+    /* Create the callback data object - It will be freed by the alloc_response_cb */
+    info_release_cbdata *alloc_cbdata = (info_release_cbdata *) malloc(sizeof(info_release_cbdata));
+    alloc_cbdata->ninfo = 5;
+
+    PMIX_INFO_CREATE(alloc_cbdata->info, 5);
+    PMIX_INFO_XFER(&alloc_cbdata->info[0], &info[0]);
+    PMIX_INFO_LOAD(&alloc_cbdata->info[1], "prte.hotel.room_number", &room_number, PMIX_INT);
+    PMIX_INFO_LOAD(&alloc_cbdata->info[2], "prte.alloc.reservation_number", &reservation_number, PMIX_SIZE);
+    PMIX_INFO_LOAD(&alloc_cbdata->info[3], "prte.alloc.requestor", sender, PMIX_PROC);
+    PMIX_INFO_LOAD(&alloc_cbdata->info[4], "prte.alloc.client", &client, PMIX_PROC);
+    
+    /* Step 3: If they want to release resources proceed to execute the resource change (alloc_cb) 
+     * We will communicate with the scheduler once the processes on the resources have terminated.
+     */
+    if(PMIX_RES_CHANGE_SUB == rc_type){
+
+        /* No info provided so no release func needed */
+        alloc_cbfunc(PMIX_SUCCESS, NULL, 0, alloc_cbdata, NULL, NULL);
+        return;
+    }
+    
+
+    /* Step 4: If they requested additional resources check if we can provide them from our own node pool 
+     * If yes: proceed to execute the res change (alloc_cb). We do not need to communicate with the scheduler
+     * If no, possibly reserve some nodes (include reservation number in cbdata) and goto Step 5
+     */
+
+    /* Count the free slots in the job */
+    jdata = prte_get_job_data_object(client.nspace);
+    map = jdata->map;
+    for (n = 0; n < map->nodes->size && slots < num_procs; n++){
+        if (NULL == (node = (prte_node_t *) pmix_pointer_array_get_item(prte_node_pool, n))) {
+            continue;
+        }
+        if(node_reserved(node)){
+            continue;
+        }
+
+        if(node->slots != node->slots_inuse){
+            slots += node->slots - node->slots_inuse;
+            /* Add node to reserved list*/
+            reserve_node(node, reservation_number);
+        }
+
+    }
+    
+    /* Count free slots in the node pool */
+    bool coscheduling = true;
+
+    for (n = 0; n < prte_node_pool->size && slots < num_procs; n++) {
+        if (NULL == (node = (prte_node_t *) pmix_pointer_array_get_item(prte_node_pool, n))) {
+            continue;
+        }
+
+        /* If we coschedule we just fill up the free slots of the nodes even if other jobs are running on them */
+        if(coscheduling){
+            if(node->slots != node->slots_inuse && !node_reserved(node)){
+                slots += node->slots - node->slots_inuse;
+                /* Add node to reserved list*/
+                reserve_node(node, reservation_number);
+            }
+        }else{
+            if(node->slots_inuse == 0 && !node_reserved(node)){
+                slots += node->slots;
+                /* Add node to reseved list */
+                reserve_node(node, reservation_number);
+            }
+        }
+    }
+
+    if(slots >= num_procs){
+        /* We have enough resources, so call the callback here */
+
+        alloc_cbfunc(PMIX_SUCCESS, NULL, 0, alloc_cbdata, NULL, NULL);
+
+        return;
+    }
+
+    /* Step 5:
+     * We could not satisfy the request using our own resources, so we ask the scheduler for help
+     * Send an allocation request to the scheduler. The alloc_cb will be triggered once the scheduler responds
+     */
+    PMIX_INFO_CREATE(alloc_info, 1);
+    uint64_t num_cpus = (uint64_t) num_procs;
+    PMIX_INFO_LOAD(alloc_info, PMIX_ALLOC_NUM_CPUS, &num_cpus, PMIX_UINT64);
+    PMIx_Allocation_request_nb(PMIX_ALLOC_EXTEND, info, 1, alloc_cbfunc, alloc_cbdata);
+    PMIX_INFO_FREE(alloc_info, 1);
+    return;
+
+ERROR:
+    alloc_cbfunc(ret, NULL, 0, alloc_cbdata, NULL, NULL);
+
+}
+
+void prte_master_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
+                      prte_rml_tag_t tag, void *cbdata){
+
+    int n, ret;
+    prte_daemon_cmd_flag_t command;
+
+    n = 1;
+    ret = PMIx_Data_unpack(NULL, buffer, &command, &n, PMIX_UINT8);
+    if (PMIX_SUCCESS != ret) {
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+
+    switch (command) {
+        case PRTE_DYNRES_ALLOC_REQ_PROCESS:
+            prte_master_process_alloc_req(status, sender, buffer, tag, cbdata);
+            break;
+    }
 
 }
 
