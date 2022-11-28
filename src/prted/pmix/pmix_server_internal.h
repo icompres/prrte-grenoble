@@ -375,14 +375,16 @@ PMIX_CLASS_DECLARATION(pmix_server_pset_t);
 
 typedef struct {
     pmix_list_item_t super;
-    char rc_pset[PMIX_MAX_KEYLEN];
-    char associated_pset[PMIX_MAX_KEYLEN];
+    char **rc_psets;
+    char **assoc_psets;
     pmix_res_change_type_t rc_type;
     size_t nprocs;
     size_t nlocalprocs;
     size_t nlocalprocs_finalized;
     size_t nglobalprocs_finalized;
     size_t nglobalprocs_terminated;
+    int32_t num_rc_psets;
+    int32_t num_assoc_psets;
     bool queryable;
 } prte_res_change_t;
 PMIX_CLASS_DECLARATION(prte_res_change_t);

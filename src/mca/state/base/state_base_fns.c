@@ -736,7 +736,8 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
             pmix_server_pset_t *pset;
             PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-                if(0 == strcmp(res_change->rc_pset, pset->name)){
+                /* Note: So far the first delat pset always is the subtraction (in case of replace)*/
+                if(0 == strcmp(res_change->rc_psets[0], pset->name)){
                     
                     for(p = 0; p < pset->num_members; p++){
                         if(PMIX_CHECK_PROCID(&pdata->name, &pset->members[p])){
@@ -755,7 +756,7 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
                 pmix_proc_t _target;
                 PMIX_LOAD_NSPACE(_target.nspace, PRTE_PROC_MY_NAME->nspace);
                 char *rc_pset = (char*) malloc(PMIX_MAX_KEYLEN);
-                strncpy(rc_pset, res_change->rc_pset, PMIX_MAX_KEYLEN);
+                strncpy(rc_pset, res_change->rc_psets[0], PMIX_MAX_KEYLEN);
                 
                 for(p = 0; p < daemon_job->num_procs; p++){
                     _target.rank = p;

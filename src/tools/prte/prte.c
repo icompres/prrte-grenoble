@@ -1117,11 +1117,11 @@ int main(int argc, char *argv[])
     }
     free(pset_name);
     //printf("\nPRRTE HNP Server pid:\n %lu\n\n", (unsigned long) getpid());
-    char hostname[256];
-    gethostname(hostname, 256);
-    FILE *f = fopen("/opt/hpc/build/examples/tests/hnp", "a");
-    fprintf(f, "Proc %s: pid: %lu, host: %s\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned long)getpid(), hostname);
-    fclose(f);
+    //char hostname[256];
+    //gethostname(hostname, 256);
+    //FILE *f = fopen("/opt/hpc/build/examples/tests/hnp", "a");
+    //fprintf(f, "Proc %s: pid: %lu, host: %s\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned long)getpid(), hostname);
+    //fclose(f);
 
     /* Initialize the master timing list */
     master_timing_list = (node_t *)calloc(1, sizeof(node_t));
@@ -1925,9 +1925,11 @@ static void _rchandler(int sd, short args, void *cbdata)
     pmix_value_t *value_ptr;
     size_t ninfo = scd->ninfo;
     size_t n, i, k, m, ret, sz, rc_nprocs, reservation_number = 0, flag = 0;
+    int32_t ninput = 1, noutput = 1;
     pmix_status_t rc=PMIX_SUCCESS;
     char *recv_cmd = NULL;
     char *delta_pset_name;
+    char **input_psets = NULL;
     pmix_res_change_type_t rc_type;
     pmix_data_buffer_t *buf;
     prte_grpcomm_signature_t *sig;
@@ -1942,7 +1944,6 @@ static void _rchandler(int sd, short args, void *cbdata)
     client_ptr = &client;
 
     //printf("PRRTE Master: Recieved Resource Change request\n");
- 
 
     if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
         scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
@@ -1999,7 +2000,12 @@ static void _rchandler(int sd, short args, void *cbdata)
                             }
                         }
                         if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.input")){
+                            ninput = (int32_t) info_ptr2[k].value.data.darray->size;
+                            input_psets = malloc(ninput * sizeof(char *));
                             value_ptr = (pmix_value_t *) info_ptr2[k].value.data.darray->array;
+                            for(m = 0; m < ninput; m++){
+                                input_psets[m] = strdup(value_ptr[m].data.string);
+                            }
                             strcpy(assoc_pset, value_ptr[0].data.string);
                             flag = 1;
                         }
@@ -2017,8 +2023,8 @@ static void _rchandler(int sd, short args, void *cbdata)
 
         /* get the client proc */
     }
-    printf("have read values: assoc_pset -> %s, rc_type -> %d, num_procs ->%d, client.nspace-> %s, client.rank -> %d, reservation_number -> %d\n", assoc_pset, rc_type, rc_nprocs, client.nspace, client.rank, reservation_number);
-    
+    //printf("have read values: assoc_pset -> %s, rc_type -> %d, num_procs ->%d, client.nspace-> %s, client.rank -> %d, reservation_number -> %d\n", assoc_pset, rc_type, rc_nprocs, client.nspace, client.rank, reservation_number);
+
     /* no associated PSet given so use a dummy name */
     if(flag == 0){
         strcpy(assoc_pset, assoc_pset_dummy_name);
@@ -2138,10 +2144,14 @@ static void _rchandler(int sd, short args, void *cbdata)
         ret = PMIx_Data_pack(NULL, buf2, &cmd, 1, PMIX_UINT8);
 
         ret = PMIx_Data_pack(NULL, buf2, &rc_type, 1, PMIX_UINT8);
-        
-        ret = PMIx_Data_pack(NULL, buf2, (void*) &delta_pset_name, 1, PMIX_STRING);
 
-        ret = PMIx_Data_pack(NULL, buf2, (void*) &assoc_pset, 1, PMIX_STRING);
+        ret = PMIx_Data_pack(NULL, buf2, &noutput, 1, PMIX_INT32);
+        
+        ret = PMIx_Data_pack(NULL, buf2, (void*) &delta_pset_name, noutput, PMIX_STRING);
+
+        ret = PMIx_Data_pack(NULL, buf2, &ninput, 1, PMIX_INT32);
+
+        ret = PMIx_Data_pack(NULL, buf2, (void*) input_psets, ninput, PMIX_STRING);
         //prte_rml.send_buffer_nb(&daemon_procid, buf2, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
         PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
     }
@@ -2169,6 +2179,7 @@ static void _rchandler(int sd, short args, void *cbdata)
     free(delta_procs);
     free(delta_pset_name);
     free(assoc_pset);
+    free(input_psets);
     
     
     if(NULL != scd->evncbfunc){
@@ -2320,6 +2331,7 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
 
     size_t ninfo, sz, reservation_number, num_procs, slots = 0, free_slots_in_job = 0;
     pmix_info_t *info = NULL, *info_rc_op_handle = NULL, *info_ptr, *info_ptr2, *info_ptr3, *alloc_info, *cb_info;
+    pmix_alloc_directive_t directive;
 
     pmix_proc_t client;
     prte_node_t *node;
@@ -2334,6 +2346,10 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
     n = 1;
     /* Unload the client proc */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &client, &n, PMIX_PROC))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+    if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &directive, &n, PMIX_UINT8))){
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }

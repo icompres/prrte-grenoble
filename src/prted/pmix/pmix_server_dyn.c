@@ -1289,6 +1289,12 @@ pmix_status_t pmix_server_alloc_fn(const pmix_proc_t *client, pmix_alloc_directi
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
+
+    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &directive, 1, PMIX_UINT8))){
+        PRTE_ERROR_LOG(ret);
+        goto ERROR;
+    }
+
     if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &ndata, 1, PMIX_SIZE))){
         PRTE_ERROR_LOG(ret);
         goto ERROR;

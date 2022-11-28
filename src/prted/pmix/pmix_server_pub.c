@@ -531,7 +531,6 @@ void pmix_server_keyval_client(int status, pmix_proc_t *sender, pmix_data_buffer
         PMIX_DATA_BUFFER_DESTRUCT(&pbkt);
         goto release;
     }
-    printf("UNPACK npdata = %d\n", npdata);
 
     if (0 < npdata) {
         PMIX_PDATA_CREATE(pdata, npdata);

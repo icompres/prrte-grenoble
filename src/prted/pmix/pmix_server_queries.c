@@ -553,7 +553,6 @@ static void _query(int sd, short args, void *cbdata)
                 int num_requirements = 0;
                 int num_requirements_fullfilled = 0;
                 pmix_proc_t requestor;
-
                 /* If we do not have any resource changes in our list there is nothing we can do*/
                 if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
                     continue;
@@ -589,14 +588,20 @@ static void _query(int sd, short args, void *cbdata)
 
                         /* They specified the name of the associated PSet as qualifier */
                         if(NULL != assoc_pset_qualifier){
+                            
                             /* Need to handle the special case of 'mpi://SELF' separately. We search for the resource change where the requesting proc is included in the delta PSet */
                             if(0 == strcmp("mpi://SELF", assoc_pset_qualifier)){
                                 pmix_server_pset_t * pset;
-                                
+                                bool found = false;
 
                                 PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-                                    if(0 == strcmp(pset->name, res_change->rc_pset)){
-
+                                    for(k = 0; k < res_change->num_rc_psets; k++){
+                                        if(0 == strcmp(pset->name, res_change->rc_psets[k])){
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if(found){
                                         break;
                                     }
                                 }
@@ -606,14 +611,24 @@ static void _query(int sd, short args, void *cbdata)
                                         break;
                                     }
                                 }
-                            }else if(0 == strcmp(res_change->associated_pset, assoc_pset_qualifier)){
-                                ++num_requirements_fullfilled;
+                            }else{
+                                /* One of the associated psets must match */
+                                for(k = 0; k < res_change->num_assoc_psets; k++){
+                                    if(0 == strcmp(res_change->assoc_psets[k], assoc_pset_qualifier)){
+                                        ++num_requirements_fullfilled;
+                                        break;
+                                    }
+                                }
                             }
                         }
-
-                        /* They specified the name of the associated PSet as qualifier */
-                        if(NULL != rc_pset_qualifier && 0 == strcmp(res_change->rc_pset, rc_pset_qualifier)){
-                            ++num_requirements_fullfilled;
+                        /* They specified the name of the delta PSet as qualifier */
+                        if(NULL != rc_pset_qualifier){
+                            for(k = 0; k < res_change->num_rc_psets; k++){
+                                if(0 == strcmp(res_change->rc_psets[k], rc_pset_qualifier)){
+                                    ++num_requirements_fullfilled;
+                                    break;
+                                }
+                            }
                         }
 
                         /* Break out if this res change fullfills all requirements*/
@@ -640,12 +655,36 @@ static void _query(int sd, short args, void *cbdata)
                 if (0 == strcmp(q->keys[n], PMIX_RC_TYPE)) {
                     PMIX_INFO_LOAD(&kv->info, PMIX_RC_TYPE, &res_change->rc_type, PMIX_UINT8);
                 }else if (0 == strcmp(q->keys[n], PMIX_RC_DELTA)){
-                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_DELTA, res_change->rc_pset, PMIX_STRING);
+                    pmix_data_array_t _darray;
+                    pmix_value_t *darray_value_ptr;
+
+                    PMIX_DATA_ARRAY_CONSTRUCT(&_darray, res_change->num_rc_psets, PMIX_VALUE);
+                    darray_value_ptr = (pmix_value_t *) _darray.array;
+
+                    for(k = 0; k < res_change->num_rc_psets; k++){
+                        PMIX_VALUE_LOAD(&darray_value_ptr[k], res_change->rc_psets[k], PMIX_STRING);
+                    }
+                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_DELTA, &_darray, PMIX_DATA_ARRAY);
+                    
+                    PMIX_DATA_ARRAY_DESTRUCT(&_darray);
                 /* There might be the situation where a client specifies a special value for the PMIX_ASSOC qualifier (e.g. mpi://self). 
-                 * So we might return another PMIX_ASSOC value than specified in as qualifier.
+                 * So we might return another PMIX_ASSOC value than specified as qualifier.
                  */
                 }else if (0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
-                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, res_change->associated_pset, PMIX_STRING);
+                    pmix_data_array_t _darray;
+                    pmix_value_t *darray_value_ptr;
+
+                    PMIX_DATA_ARRAY_CONSTRUCT(&_darray, res_change->num_assoc_psets, PMIX_VALUE);
+                    darray_value_ptr = (pmix_value_t *) _darray.array;
+
+                    for(k = 0; k < res_change->num_assoc_psets; k++){
+                        PMIX_VALUE_LOAD(&darray_value_ptr[k], res_change->assoc_psets[k], PMIX_STRING);
+                    }
+                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, &_darray, PMIX_DATA_ARRAY);
+                    
+                    PMIX_DATA_ARRAY_DESTRUCT(&_darray);
+
+                    //PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, res_change->associated_pset, PMIX_STRING);
                 }
                 pmix_list_append(&results[m], &kv->super);
                 

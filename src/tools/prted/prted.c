@@ -771,14 +771,14 @@ int main(int argc, char *argv[])
     timings_my_rank = PRTE_PROC_MY_NAME->rank;
     daemon_timing_list = (node_t*)calloc(1, sizeof(node_t));
 
-    char hostname[256];
-    char filename[256];
-    gethostname(hostname, 256);
-    sprintf(filename, "/opt/hpc/build/examples/tests/pid_%lu", (unsigned long) getpid());
-
-    FILE *f = fopen(filename, "a");
-    fprintf(f, "Proc %s: pid: %lu, host: %s\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned long)getpid(), hostname);
-    fclose(f);
+    //char hostname[256];
+    //char filename[256];
+    //gethostname(hostname, 256);
+    //sprintf(filename, "/opt/hpc/build/examples/tests/pid_%lu", (unsigned long) getpid());
+//
+    //FILE *f = fopen(filename, "a");
+    //fprintf(f, "Proc %s: pid: %lu, host: %s\n", PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned long)getpid(), hostname);
+    //fclose(f);
 
 
     /* loop the event lib until an exit event is detected */

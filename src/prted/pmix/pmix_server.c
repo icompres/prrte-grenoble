@@ -546,7 +546,7 @@ void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
     /* If it is a resource substrcation: Do not delete the resource change as we need to wait for clients to finalize */ 
     prte_res_change_t *res_change;
     PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-        if(0 == strcmp(res_change->rc_pset, rc_pset)){
+        if(0 == strcmp(res_change->rc_psets[0], rc_pset)){
             if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
                 break;
             }
@@ -1732,8 +1732,27 @@ static void psdes(pmix_server_pset_t *p)
         free(p->members);
     }
 }
+static void rccon(prte_res_change_t *rc){
+    rc->rc_psets = NULL;
+    rc->assoc_psets = NULL;
+    rc->num_rc_psets = 0;
+    rc->num_assoc_psets = 0;
+}
+static void rcdes(prte_res_change_t *rc){
+    int32_t n;
+    for(n = 0; n < rc->num_rc_psets; n++){
+        free(rc->rc_psets[n]);
+    }
+    free(rc->rc_psets);
+
+    for(n = 0; n < rc->num_assoc_psets; n++){
+        free(rc->assoc_psets[n]);
+    }
+    free(rc->assoc_psets);
+
+}
 PMIX_CLASS_INSTANCE(pmix_server_pset_t, pmix_list_item_t, pscon, psdes);
-PMIX_CLASS_INSTANCE(prte_res_change_t, pmix_list_item_t, NULL, NULL);
+PMIX_CLASS_INSTANCE(prte_res_change_t, pmix_list_item_t, rccon, rcdes);
 PMIX_CLASS_INSTANCE(prte_node_reservation_t, pmix_list_item_t, NULL, NULL);
 
 static void tlcon(prte_pmix_tool_t *p)
