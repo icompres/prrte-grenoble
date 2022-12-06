@@ -5,6 +5,7 @@
         "initializer_list": "c",
         "utility": "c",
         "prte_globals.h": "c",
-        "pmix_server_internal.h": "c"
+        "pmix_server_internal.h": "c",
+        "runtime.h": "c"
     }
 }

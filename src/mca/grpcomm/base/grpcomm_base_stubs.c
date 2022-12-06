@@ -449,8 +449,10 @@ static int create_dmns(prte_grpcomm_signature_t *sig, pmix_rank_t **dmns, size_t
                 proc = NULL;
             }
             if (NULL == proc) {
+                printf("did not find proc [%s:%d]\n", sig->signature[n].nspace, sig->signature[n].rank);
                 PRTE_ERROR_LOG(PRTE_ERR_NOT_FOUND);
                 rc = PRTE_ERR_NOT_FOUND;
+                exit(1);
                 goto done;
             }
             //if (NULL
