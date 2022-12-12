@@ -491,7 +491,40 @@ static void _query(int sd, short args, void *cbdata)
                 sz = pmix_list_get_size(&prte_pmix_server_globals.psets);
                 PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_NUM_PSETS, &sz, PMIX_SIZE);
                 pmix_list_append(&results[m], &kv->super);
-            } else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSET_NAMES)) {
+
+            } else if (0 == strcmp(q->keys[n], PMIX_QUERY_LAUNCH_PSET)) {
+                pmix_server_pset_t *ps;
+                pmix_proc_t *qual_proc = NULL;
+                for(k = 0 ; k < q->nqual; k++){
+                    if(0 == strcmp(q->qualifiers[k].key, PMIX_PROCID)){
+                        qual_proc = q->qualifiers[k].value.data.proc;
+                        break;
+                    }
+                }
+                if(NULL == qual_proc){
+                    continue;
+                }
+
+                int flag = 0;
+                PMIX_LIST_FOREACH(ps, &prte_pmix_server_globals.psets, pmix_server_pset_t)
+                {
+                    if(PRTE_FLAG_TEST(ps, PRTE_PSET_FLAG_ADD)){
+                        for(k = 0; k < ps->num_members; k++){
+                            if(PMIX_CHECK_PROCID(&ps->members[k], qual_proc)){
+                                kv = PMIX_NEW(prte_info_item_t);
+                                PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_LAUNCH_PSET, ps->name, PMIX_STRING);
+                                pmix_list_append(&results[m], &kv->super);
+                                flag = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if(1 == flag){
+                        break;
+                    }
+                }
+                
+            }else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSET_NAMES)) {
                 pmix_server_pset_t *ps;
                 ans = NULL;
                 PMIX_LIST_FOREACH(ps, &prte_pmix_server_globals.psets, pmix_server_pset_t)
@@ -511,35 +544,32 @@ static void _query(int sd, short args, void *cbdata)
                 pmix_server_pset_t *pset;
                 pmix_data_array_t data;
                 pmix_proc_t *ptr;
-                int flag=0;
+                int flag = 0;
 
-                for(k=0; k < q->nqual; k++){
+                for(k = 0; k < q->nqual; k++){
                     if(0 == strcmp(q->qualifiers[k].key, PMIX_PSET_NAME) ){
                         PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-                            
+                                
                             if(0 == strcmp(pset->name, q->qualifiers[k].value.data.string)){
-                                flag=1;
+                                flag = 1;
                                 break;
                             }
                         }
-                        if(flag==1){
+                        if(flag == 1){
                             PMIX_DATA_ARRAY_CONSTRUCT(&data, pset->num_members, PMIX_PROC);
                             ptr=(pmix_proc_t*)data.array;
                             size_t proc;
-                            for(proc=0;proc<pset->num_members;proc++){
+                            for(proc = 0;proc < pset->num_members; proc++){
                                 PMIX_PROC_LOAD(&ptr[proc],pset->members[proc].nspace, pset->members[proc].rank);
                             }
                         }
                     }
                 }
+
                 if(flag==0){
                     continue;
                 }else{
-                    //if(pmix_list_get_size(&results) > 0){
-                    //    prte_info_item_t *qual_rm = pmix_list_remove_last(&results);
-                    //    PMIX_RELEASE(qual_rm);
-                    //}
-                    
+
                     kv = PMIX_NEW(prte_info_item_t);
                     PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSET_MEMBERSHIP, (void**)&data, PMIX_DATA_ARRAY);
                     PMIX_DATA_ARRAY_DESTRUCT(&data);
@@ -562,11 +592,11 @@ static void _query(int sd, short args, void *cbdata)
                 for(k=0; k < q->nqual; k++){
                     if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_DELTA)){ 
                         rc_pset_qualifier = q->qualifiers[k].value.data.string;
-                        num_requirements ++;
+                        num_requirements = 1;
 
                     }else if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_ASSOC)){
                         assoc_pset_qualifier = q->qualifiers[k].value.data.string;
-                        num_requirements ++;
+                        num_requirements = 1;
                     }else if(0 == strcmp(q->qualifiers[k].key, PMIX_PROCID)){
                         strcpy(requestor.nspace, q->qualifiers[k].value.data.proc->nspace);
                         requestor.rank = q->qualifiers[k].value.data.proc->rank;
@@ -579,7 +609,6 @@ static void _query(int sd, short args, void *cbdata)
                 if(0 < num_requirements){
                     
                     PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-                        
                         if(!res_change->queryable){
                             continue;
                         }
@@ -632,7 +661,7 @@ static void _query(int sd, short args, void *cbdata)
                         }
 
                         /* Break out if this res change fullfills all requirements*/
-                        if(num_requirements_fullfilled == num_requirements){
+                        if(num_requirements_fullfilled >= num_requirements){
                             flag = 1;
                             break;
                         }

@@ -993,6 +993,7 @@ int main(int argc, char *argv[])
     /* convert the apps to an array */
     napps = pmix_list_get_size(&apps);
     PMIX_APP_CREATE(papps, napps);
+
     n = 0;
     PMIX_LIST_FOREACH(app, &apps, prte_pmix_app_t)
     {
@@ -1079,51 +1080,22 @@ int main(int argc, char *argv[])
 
     /* Initialize the setop server */
     setop_server_init();
-    
 
-    /* register the resource change cmd handler */
-    pmix_status_t rc_define = PMIX_RC_DEFINE;
-    PMIx_Register_event_handler(&rc_define, 1, NULL, 0, rchandler, NULL, NULL);
-
-
-    /* Listen for special commands send to the master */
+    /* Listen for special commands send to the master (Resource Changes)*/
     PRTE_RML_RECV(PRTE_NAME_WILDCARD, PRTE_RML_TAG_MASTER,
               PRTE_RML_PERSISTENT, prte_master_recv, NULL);
     
-    /* create a pset for the job */
-    pmix_data_buffer_t *buf;
-    prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_DEFINE_PSET;
-
-    char *pset_name = strdup("test1");
-    size_t nprocs = prte_get_job_data_object(spawnednspace)->num_procs;
-    pmix_pointer_array_t *pset_procs_parray = prte_get_job_data_object(spawnednspace)->procs;
 
     /* Set the highest job rank in the setop server */
+    size_t nprocs = prte_get_job_data_object(spawnednspace)->num_procs;    
     set_highest_job_rank(spawnednspace, nprocs);
-     
-    /* Send PSET_DEFINE_CMD to all daemons */ 
-    int ndaemons = prte_process_info.num_daemons;
-    pmix_proc_t daemon_procid;
-    PMIX_LOAD_PROCID(&daemon_procid, PRTE_PROC_MY_HNP->nspace, 0);
-    for(i = 0; i < ndaemons; i++){
-        PMIX_DATA_BUFFER_CREATE(buf);
-        ret = PMIx_Data_pack(NULL, buf, &cmd, 1, PMIX_UINT8);
-        ret = PMIx_Data_pack(NULL, buf, &nprocs, 1, PMIX_SIZE);
-    
-        ret = PMIx_Data_pack(NULL, buf, &pset_name, 1, PMIX_STRING);
-    
-        for(n = 0; n < nprocs; n++){
-            pmix_proc_t pset_proc;
-            prte_proc_t *prte_proc = (prte_proc_t *) pset_procs_parray->addr[n];
-            PMIX_PROC_LOAD(&pset_proc, prte_proc->name.nspace, prte_proc->name.rank);
-            ret = PMIx_Data_pack(NULL, buf, &pset_proc, 1, PMIX_PROC);
-        }
 
-        daemon_procid.rank = i;
-        //prte_rml.send_buffer_nb(&daemon_procid, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
-        PRTE_RML_SEND(ret, daemon_procid.rank, buf, PRTE_RML_TAG_MALLEABILITY);
-    }
+    /* create a pset for the job */
+    char *pset_name = strdup("RM://jobs/0");
+    pmix_pointer_array_t *pset_procs_parray = prte_get_job_data_object(spawnednspace)->procs;
+    prte_pset_define_from_parray(pset_name, pset_procs_parray, PRTE_PSET_FLAG_ADD); 
     free(pset_name);
+
     //printf("\nPRRTE HNP Server pid:\n %lu\n\n", (unsigned long) getpid());
     //char hostname[256];
     //gethostname(hostname, 256);
@@ -1387,8 +1359,6 @@ static void epipe_signal_callback(int fd, short args, void *cbdata)
 
     return;
 }
-
-
 
 /* Resource changes */
 typedef struct _info_release_cbdata{
@@ -2338,8 +2308,8 @@ void alloc_response_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninf
 
 /* Callback for resource change requests 
  * 1. Parse the request
- * 2. Create/Adjust job data and create delta PSet
- * 3. Send PSet to all daemons
+ * 2. Execute the set operations
+ * 3. perform resource operations 
  * 4. SUB: get launch message and send launch command (will only update PMIx namespace)
  * 5. Send resource change query data to all daemons
  * 6. ADD: Get launch message and send launch command
@@ -2468,11 +2438,8 @@ static void _rchandler_new(int sd, short args, void *cbdata)
     }
     
     
-    /* 4. SUB: retrieve the data needed by the launcher" && send "launch" command to daemons
+    /* 4. SUB: retrieve the data needed by the "launcher" && send "launch" command to daemons
      * When removing procs we need to do this before we make the query info available
-     * 
-     * FIXME: When removing procs, the launch msg is not sent by prte_plm_base_launch_apps!
-     *  -> we send it here manually & do not release cbdata->jdata in lauch_apps
      */
     if(0 < num_sub && NULL != job_data_after){
         prte_state_caddy_t *cd = PMIX_NEW(prte_state_caddy_t);
@@ -2480,21 +2447,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
         cd->job_state = PRTE_JOB_STATE_SUB;
         
         prte_plm_base_launch_apps(0,0, cd);
-        
-        /* message goes to all daemons */
-        sig = PMIX_NEW(prte_grpcomm_signature_t);
-        sig->signature = (pmix_proc_t *) malloc(sizeof(pmix_proc_t));
-        PMIX_LOAD_PROCID(&sig->signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
-        sig->sz = 1;
-        if (PRTE_SUCCESS != (rc = prte_grpcomm.xcast(sig, PRTE_RML_TAG_DAEMON, &job_data_after->launch_msg))) {
-            PRTE_ERROR_LOG(rc);
-            PMIX_RELEASE(sig);
-            return;
-        }
-        //PMIX_DATA_BUFFER_DESTRUCT(&job_data->launch_msg);
-        /* maintain accounting */
-        PMIX_RELEASE(sig);
-        
+                
         /* 5. Inform daemons about res change so they can answer related queries */
         prte_ophandle_inform_daemons(info_rc_op_handle, PMIX_RES_CHANGE_SUB);
 
@@ -2512,338 +2465,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
     }  
 }
 
-/* Callback for resource change requests 
- * 1. Parse the request
- * 2. Create/Adjust job data and create delta PSet
- * 3. Send PSet to all daemons
- * 4. SUB: get launch message and send launch command (will only update PMIx namespace)
- * 5. Send resource change query data to all daemons
- * 6. ADD: Get launch message and send launch command
- */
-static void _rchandler(int sd, short args, void *cbdata)
-{
-    prte_pmix_server_op_caddy_t *scd = (prte_pmix_server_op_caddy_t *) cbdata;
-    pmix_info_t *info = scd->info, *info_rc_op_handle, *info_ptr, *info_ptr2, *info_ptr3;
-    pmix_value_t *value_ptr;
-    size_t ninfo = scd->ninfo;
-    size_t n, i, k, m, ret, sz, rc_nprocs, reservation_number = 0, flag = 0;
-    int32_t ninput = 1, noutput = 1;
-    pmix_status_t rc = PMIX_SUCCESS;
-    char *recv_cmd = NULL;
-    char *delta_pset_name;
-    char **input_psets = NULL;
-    pmix_res_change_type_t rc_type;
-    pmix_data_buffer_t *buf;
-    prte_grpcomm_signature_t *sig;
-    prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_DEFINE_PSET;
-    int ndaemons = prte_process_info.num_daemons;
-    pmix_proc_t daemon_procid, client, *client_ptr;
-    char *assoc_pset_dummy_name = "pmix://assoc_pset_dummy";
-    char *assoc_pset;
 
-    PMIX_PROC_CONSTRUCT(&client);
-    PMIX_LOAD_PROCID(&client, spawnednspace, PMIX_RANK_UNDEF);
-    client_ptr = &client;
-
-    //printf("PRRTE Master: Recieved Resource Change request\n");
-
-    if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
-        scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
-        return;
-    }
-
-    assoc_pset = (char*) malloc(256);
-
-    /* TODO:    - Perform setops until res change found -> index
-     *            - Account for rc change at arbitrary index 
-     *            - Perform res res_change
-     *            - Execute remaining setops
-     */
-
-    /* 1. parse the resource change command message */
-    for(n = 0; n < ninfo; n++){
-        if(0 == strcmp(info[n].key, "PMIX_RC_CMD")){
-            PMIX_VALUE_UNLOAD(rc, &info[n].value, (void**)&recv_cmd, &sz);
-            //prte_output(2, "SERVER: RECEIVED RC_CMD %s\n", recv_cmd);
-            
-            rc = parse_rc_cmd(recv_cmd, &rc_type, &rc_nprocs);
-            if(rc != PMIX_SUCCESS){
-                printf("Error parsing rc command\n");
-                scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
-                return;
-            }
-            free(recv_cmd);
-        }
-        else if(0 == strcmp(info[n].key, PMIX_RC_ASSOC)){
-            
-            strcpy(assoc_pset, info[n].value.data.string);
-            flag = 1;
-        }
-        else if(PMIX_CHECK_KEY(&info[n], "mpi.rc_op_handle")){
-            info_rc_op_handle = &info[n];
-
-            info_ptr = (pmix_info_t *) info_rc_op_handle->value.data.darray->array;
-
-            rc_type = info_ptr[0].value.data.uint8;
-
-            for(i = 0; i < info_rc_op_handle->value.data.darray->size; i++){
-                if(PMIX_CHECK_KEY(&info_ptr[i], PMIX_RC_TYPE)){
-
-                    rc_type = info_ptr[i].value.data.uint8;
-
-                }else if(PMIX_CHECK_KEY(&info_ptr[i], "mpi.op_info")){
-                   
-                    info_ptr2 = (pmix_info_t *) info_ptr[i].value.data.darray->array;
-                    for(k = 0; k < info_ptr[i].value.data.darray->size; k++){
-
-                        if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.info")){
-
-                            info_ptr3 = (pmix_info_t *) info_ptr2[k].value.data.darray->array;
-                            for(m = 0; m < info_ptr2[k].value.data.darray->size; m++){
-
-                                if(PMIX_CHECK_KEY(&info_ptr3[m], "mpi.op_info.info.num_procs")){
-                                    
-                                    sscanf(info_ptr3[m].value.data.string, "%zu", &rc_nprocs);
-                                }
-                            }
-                        }
-                        if(PMIX_CHECK_KEY(&info_ptr2[k], "mpi.op_info.input")){
-                            ninput = (int32_t) info_ptr2[k].value.data.darray->size;
-                            input_psets = malloc(ninput * sizeof(char *));
-                            value_ptr = (pmix_value_t *) info_ptr2[k].value.data.darray->array;
-                            for(m = 0; m < ninput; m++){
-                                input_psets[m] = strdup(value_ptr[m].data.string);
-                            }
-                            strcpy(assoc_pset, value_ptr[0].data.string);
-                            flag = 1;
-                        }
-                    }
-                }
-            }
-        }
-        else if(PMIX_CHECK_KEY(&info[n], "prte.alloc.client")){
-            client_ptr = info[n].value.data.proc;
-        }
-        else if(PMIX_CHECK_KEY(&info[n], "prte.alloc.reservation_number")){
-            reservation_number = info[n].value.data.size;
-        }
-        /* get the reservation number */
-
-        /* get the client proc */
-    }
-    //printf("have read values: assoc_pset -> %s, rc_type -> %d, num_procs ->%d, client.nspace-> %s, client.rank -> %d, reservation_number -> %d\n", assoc_pset, rc_type, rc_nprocs, client.nspace, client.rank, reservation_number);
-
-    /* no associated PSet given so use a dummy name */
-    if(flag == 0){
-        strcpy(assoc_pset, assoc_pset_dummy_name);
-    }
-
-    init_add_timing(master_timing_list, (void **) &cur_master_timing_frame, sizeof(timing_frame_master_t));
-    make_timestamp_base(&cur_master_timing_frame->rc_start);
-
-    size_t num_ops, end_index;
-    rc = prte_ophandle_get_num_ops(info_rc_op_handle, &num_ops);
-    if(rc != PMIX_SUCCESS){
-        printf("get_num_ops returned error %d\n", rc);
-        exit(1);
-    }else{
-        printf("get_num_ops returned %zu\n", num_ops);
-    }
-    rc = ophandle_execute(*client_ptr, info_rc_op_handle, 0, &end_index);
-    if(rc != PMIX_SUCCESS){
-        printf("execute returned error %d\n", rc);
-        exit(1);
-    }else{
-        printf("execute returned %zu\n", num_ops);
-    }
-    prte_setop_t *setop;
-    ret = prte_ophandle_get_nth_op(info_rc_op_handle, end_index, &setop);
-    rc_type =  setop->op;
-    
-
-    /* get the job data object & do a sanity check */
-    prte_job_t *cur_job_data = prte_get_job_data_object(client_ptr->nspace);
-    if(rc_type == PMIX_RES_CHANGE_SUB && rc_nprocs >= cur_job_data->num_procs){
-        if(NULL != scd->evncbfunc){
-            scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, scd->cbdata);
-        }
-        /* This callback will send a response to the requesting daemon*/
-        if(NULL != scd->infocbfunc){
-            scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, scd->cbdata, NULL, NULL);
-        }
-        return;
-    }
-    
-    /* 2. create the delta pset and update the job_data (Currently defaulting to the job data of the requestor. ) */
-
-    make_timestamp_base(&cur_master_timing_frame->jdata_start);
-
-    prte_job_t *job_data;
-    prte_proc_t **delta_procs;
-    delta_pset_name = (char*) malloc(256);
-    sprintf(delta_pset_name, "rc%d", res_change_cnt++);
-
-    if(rc_type == PMIX_RES_CHANGE_ADD){
-        job_data = prte_get_job_data_object(client_ptr->nspace);
-        setup_resource_add(job_data, rc_nprocs, &delta_procs, reservation_number);
-    }else if (rc_type == PMIX_RES_CHANGE_SUB){
-        job_data = PMIX_NEW(prte_job_t);
-        setup_resource_sub(client_ptr->nspace, job_data, rc_nprocs, &delta_procs);
-    }
-    
-    make_timestamp_base(&cur_master_timing_frame->jdata_end);
-    set_res_change_id(&cur_master_timing_frame->res_change_id, delta_pset_name);
-    cur_master_timing_frame->res_change_type = rc_type;
-    cur_master_timing_frame->res_change_size = rc_nprocs;
-      
-    //printf("Received resource change '%s' associated with '%s' of type %s\n Delta Pset:\n", delta_pset_name, assoc_pset, rc_type == PMIX_RES_CHANGE_ADD ? "ADD" : "SUB");
-    
-    //for(n = 0; n < rc_nprocs; n++){
-    //    printf("    [%d: %s]\n", n, PRTE_NAME_PRINT(&delta_procs[n]->name));
-    //}
-    //printf("--> job size after resource change will be: %d \n\n",job_data->num_procs);
-    //char *job_data_string;
-    //prte_job_print(&job_data_string, job_data);
-    ////printf("%s\n", job_data_string);
-    //free(job_data_string);
-    
-
-    /* 3. Send the 'Define Pset' command for the delta PSet to all daemons and publish the provided pset info */
-    make_timestamp_base(&cur_master_timing_frame->pset_start);
-
-    PMIX_LOAD_PROCID(&daemon_procid, PRTE_PROC_MY_HNP->nspace, 0);
-    for(n=0; n < ndaemons; n++){
-        PMIX_DATA_BUFFER_CREATE(buf);
-        daemon_procid.rank = n;
-        ret = PMIx_Data_pack(NULL, buf, &cmd, 1, PMIX_UINT8);
-        ret = PMIx_Data_pack(NULL, buf, &rc_nprocs, 1, PMIX_SIZE);
-        ret = PMIx_Data_pack(NULL, buf, (void*)&delta_pset_name, 1, PMIX_STRING);
-        for(i = 0; i < rc_nprocs; i++){
-            pmix_proc_t pset_proc;
-            prte_proc_t *prte_proc = (prte_proc_t *) delta_procs[i];
-            PMIX_PROC_LOAD(&pset_proc, prte_proc->name.nspace, prte_proc->name.rank);
-            ret = PMIx_Data_pack(NULL, buf, &pset_proc, 1, PMIX_PROC);
-        }
-
-        PRTE_RML_SEND(ret, daemon_procid.rank, buf, PRTE_RML_TAG_MALLEABILITY);
-    }
-
-    /* 3b) Execute all set operations specified by the request and publish the provided pset info */
-    rc = ophandle_execute(*client_ptr, info, end_index + 1, &end_index);
-
-
-    /* 4. retrieve the data needed by the launcher" && send "launch" command to 
-     * When removing procs we need to do this before we make the query info available
-     * 
-     * FIXME: When removing procs, the launch msg is not sent by prte_plm_base_launch_apps!
-     *  -> we send it here manually & do not release cbdata->jdata in lauch_apps
-     */
-    if(rc_type == PMIX_RES_CHANGE_SUB){
-        prte_state_caddy_t *cd = PMIX_NEW(prte_state_caddy_t);
-        cd->jdata = job_data;
-        cd->job_state = (rc_type == PMIX_RES_CHANGE_ADD) ? PRTE_JOB_STATE_LAUNCH_APPS : PRTE_JOB_STATE_SUB;
-
-        prte_plm_base_launch_apps(0,0, cd);
-        
-        /* message goes to all daemons */
-        sig = PMIX_NEW(prte_grpcomm_signature_t);
-        sig->signature = (pmix_proc_t *) malloc(sizeof(pmix_proc_t));
-        PMIX_LOAD_PROCID(&sig->signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
-        sig->sz = 1;
-        if (PRTE_SUCCESS != (rc = prte_grpcomm.xcast(sig, PRTE_RML_TAG_DAEMON, &job_data->launch_msg))) {
-            PRTE_ERROR_LOG(rc);
-            PMIX_RELEASE(sig);
-            return;
-        }
-        PMIX_DATA_BUFFER_DESTRUCT(&job_data->launch_msg);
-        PMIX_DATA_BUFFER_CONSTRUCT(&job_data->launch_msg);
-        /* maintain accounting */
-        PMIX_RELEASE(sig);
-    }
-      
-     /* 5. Inform daemons about res change so they can answer related queries */      
-    make_timestamp_base(&cur_master_timing_frame->rc_publish_start);
-
-    cmd = PRTE_DYNRES_DEFINE_RES_CHANGE;
-    pmix_data_buffer_t *buf2;
-    for(n = 0; n < ndaemons; n++){
-        PMIX_DATA_BUFFER_CREATE(buf2);
-        daemon_procid.rank = n;
-
-        ret = PMIx_Data_pack(NULL, buf2, &cmd, 1, PMIX_UINT8);
-
-        ret = PMIx_Data_pack(NULL, buf2, &rc_type, 1, PMIX_UINT8);
-
-        ret = PMIx_Data_pack(NULL, buf2, &noutput, 1, PMIX_INT32);
-        
-        ret = PMIx_Data_pack(NULL, buf2, (void*) &delta_pset_name, noutput, PMIX_STRING);
-
-        ret = PMIx_Data_pack(NULL, buf2, &ninput, 1, PMIX_INT32);
-
-        ret = PMIx_Data_pack(NULL, buf2, (void*) input_psets, ninput, PMIX_STRING);
-        //prte_rml.send_buffer_nb(&daemon_procid, buf2, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
-        PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
-    }
-
-    
-    make_timestamp_base(&cur_master_timing_frame->apply_start); 
-
-    /* 6. retrieve the data needed by the launcher && send launch command to daemons
-     * NOTE: When adding procs, the launch msg is sent by prte_plm_base_launch_apps!
-     */
-    if(rc_type == PMIX_RES_CHANGE_ADD){
-        prte_state_caddy_t *cd = PMIX_NEW(prte_state_caddy_t);
-        cd->jdata = job_data;
-        cd->job_state = PRTE_JOB_STATE_LAUNCH_APPS;
-        prte_plm_base_launch_apps(0,0, cd);
-    }
-
-    ///* We created a copy of the job data so release it here */
-    //if(rc_type == PMIX_RES_CHANGE_SUB){
-    //    PMIX_RELEASE(job_data);
-    //}
-
-    surrender_reservation(reservation_number);
-
-    free(delta_procs);
-    free(delta_pset_name);
-    free(assoc_pset);
-    free(input_psets);
-    
-    
-    if(NULL != scd->evncbfunc){
-        scd->evncbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, scd->cbdata);
-    }
-    /* This callback will send a response to the requesting daemon*/
-    if(NULL != scd->infocbfunc){
-        scd->infocbfunc(PMIX_SUCCESS, NULL, 0, scd->cbdata, NULL, NULL);
-    }
-
-    make_timestamp_base(&cur_master_timing_frame->rc_end1);
-    
-}
-
-
-static void rchandler(size_t evhdlr_registration_id, pmix_status_t status,
-                       const pmix_proc_t *source, pmix_info_t info[], size_t ninfo,
-                       pmix_info_t results[], size_t nresults,
-                       pmix_event_notification_cbfunc_fn_t cbfunc, void *cbdata){
-    prte_pmix_server_op_caddy_t *cd;
-    cd = PMIX_NEW(prte_pmix_server_op_caddy_t);
-    cd->proc = *source;
-    cd->ev.ev_base = prte_event_base;
-    cd->codes = &status;
-    cd->ncodes = 1;
-    cd->info = (pmix_info_t *) info;
-    cd->ninfo = ninfo;
-    cd->evncbfunc = cbfunc;
-    cd->cbdata = cbdata;
-    prte_event_set(prte_event_base, &(cd->ev), -1, PRTE_EV_WRITE, _rchandler, cd);
-    prte_event_set_priority(&(cd->ev), PRTE_MSG_PRI);
-    PMIX_POST_OBJECT(cd);
-    prte_event_active(&(cd->ev), PRTE_EV_WRITE, 1);
-
-}
 
 /* Step 3: execute the resource change
  * The callback function needs to be called in the end to respond to the requesting daemon. 
@@ -2872,7 +2494,7 @@ static void execute_resource_change(pmix_status_t status, pmix_proc_t *proc, pmi
     cd->infocbfunc = cbfunc;
     cd->cbdata = cbdata;
     cd->evncbfunc = NULL;
-    //prte_event_set(prte_event_base, &(cd->ev), -1, PRTE_EV_WRITE, _rchandler, cd); 
+
     prte_event_set(prte_event_base, &(cd->ev), -1, PRTE_EV_WRITE, _rchandler_new, cd);
     prte_event_set_priority(&(cd->ev), PRTE_MSG_PRI);
     PMIX_POST_OBJECT(cd);

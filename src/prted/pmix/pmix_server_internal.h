@@ -364,14 +364,37 @@ PRTE_EXPORT extern int prte_pmix_server_register_tool(pmix_nspace_t nspace);
 
 PRTE_EXPORT void info_cb_release(void *cbdata);
 
+/*** PSET FLAGS - To store some important properties ***/
+typedef uint16_t prte_pset_flags_t;
+#define PRTE_PSET_FLAGS_T PRTE_UINT16
+#define PRTE_PSET_FLAG_NONE             0x0000 // none
+#define PRTE_PSET_FLAG_ADD              0x0001 // pset represents a resource addition
+#define PRTE_PSET_FLAG_SUB              0x0004 // pset represents a resource substraction
+/*
+#define PRTE_JOB_FLAG_ABORTED           0x0008 // did this job abort?
+#define PRTE_JOB_FLAG_FORWARD_OUTPUT    0x0020 // forward output from the apps
+#define PRTE_JOB_FLAG_DO_NOT_MONITOR    0x0040 // do not monitor apps for termination
+#define PRTE_JOB_FLAG_FORWARD_COMM      0x0080 //
+#define PRTE_JOB_FLAG_RECOVERABLE       0x0100 // job is recoverable
+#define PRTE_JOB_FLAG_RESTART           0x0200 //
+#define PRTE_JOB_FLAG_PROCS_MIGRATING   0x0400 // some procs in job are migrating from one node to another
+#define PRTE_JOB_FLAG_OVERSUBSCRIBED    0x0800 // at least one node in the job is oversubscribed
+#define PRTE_JOB_FLAG_TOOL              0x1000 // job is a tool and doesn't count against allocations
+#define PRTE_JOB_FLAG_LAUNCHER          0x2000 // job is also a launcher
+#define PRTE_JOB_FLAG_ERR_REPORTED      0x4000 // error report for job has been output
+*/
+
 /* exposed shared variables */
 typedef struct {
     pmix_list_item_t super;
     char *name;
     pmix_proc_t *members;
     size_t num_members;
+    prte_pset_flags_t flags;
 } pmix_server_pset_t;
 PMIX_CLASS_DECLARATION(pmix_server_pset_t);
+
+
 
 typedef struct {
     pmix_list_item_t super;

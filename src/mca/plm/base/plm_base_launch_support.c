@@ -787,6 +787,7 @@ void prte_plm_base_launch_apps(int fd, short args, void *cbdata)
     prte_state_caddy_t *caddy = (prte_state_caddy_t *) cbdata;
     prte_job_t *jdata;
     prte_daemon_cmd_flag_t command;
+    prte_grpcomm_signature_t *sig;
     int rc;
     bool sub = false;
     PRTE_HIDE_UNUSED_PARAMS(fd, args);
@@ -830,6 +831,18 @@ void prte_plm_base_launch_apps(int fd, short args, void *cbdata)
         }
     }else{
         prte_odls_base_default_get_sub_procs_data(&jdata->launch_msg, jdata->nspace, jdata);
+            /* message goes to all daemons */
+        sig = PMIX_NEW(prte_grpcomm_signature_t);
+        sig->signature = (pmix_proc_t *) malloc(sizeof(pmix_proc_t));
+        PMIX_LOAD_PROCID(&sig->signature[0], PRTE_PROC_MY_NAME->nspace, PMIX_RANK_WILDCARD);
+        sig->sz = 1;
+        if (PRTE_SUCCESS != (rc = prte_grpcomm.xcast(sig, PRTE_RML_TAG_DAEMON, &jdata->launch_msg))) {
+            PRTE_ERROR_LOG(rc);
+            PMIX_RELEASE(sig);
+            return;
+        }
+        /* maintain accounting */
+        PMIX_RELEASE(sig);
         caddy->jdata = NULL;
     }
 

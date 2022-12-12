@@ -152,10 +152,7 @@ int prte_pmix_server_register_nspace(prte_job_t *jdata)
         prte_remove_attribute(&jdata->attributes, PRTE_JOB_INFO_CACHE);
         PMIX_RELEASE(cache);
     }
-    //char * job_string;
-    //prte_job_print(&job_string, jdata);
-    //printf("%s\n", job_string);
-    //free(job_string);
+
     /* assemble the node and proc map info */
     list = NULL;
     procs = NULL;

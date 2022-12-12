@@ -1722,6 +1722,7 @@ static void pscon(pmix_server_pset_t *p)
     p->name = NULL;
     p->members = NULL;
     p->num_members = 0;
+    p->flags = 0x0000;
 }
 static void psdes(pmix_server_pset_t *p)
 {

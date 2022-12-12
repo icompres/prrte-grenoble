@@ -127,7 +127,63 @@ void get_new_pset_name(char ** new_name){
 }
 
 int proc_cmp(pmix_proc_t p1, pmix_proc_t p2){
-    return (0 == strcmp(p1.nspace, p2.nspace) && p1.rank==p2.rank);
+    return (0 == strcmp(p1.nspace, p2.nspace) && p1.rank == p2.rank);
+}
+
+int prte_pset_define_from_parray(char *pset_name, pmix_pointer_array_t *parray, prte_pset_flags_t flags){
+    pmix_data_buffer_t *buf;
+    prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_DEFINE_PSET;
+    int ret, ndaemons = prte_process_info.num_daemons;
+    pmix_proc_t daemon_procid;
+
+    size_t n, i, size = 0;
+
+    for(n = 0; n < parray->size; n++){
+        prte_proc_t *prte_proc = (prte_proc_t *) pmix_pointer_array_get_item(parray, n);
+        if(NULL != prte_proc){
+            size ++;
+        }
+    }
+
+    PMIX_LOAD_PROCID(&daemon_procid, PRTE_PROC_MY_HNP->nspace, 0);
+    for(i = 0; i < ndaemons; i++){
+        PMIX_DATA_BUFFER_CREATE(buf);
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &cmd, 1, PMIX_UINT8))){
+            PRTE_ERROR_LOG(ret);
+            return ret;            
+        }
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &size, 1, PMIX_SIZE))){
+            PRTE_ERROR_LOG(ret);
+            return ret;            
+        }
+
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &pset_name, 1, PMIX_STRING))){
+            PRTE_ERROR_LOG(ret);
+            return ret;            
+        }
+
+        /* pack the PSet flags */
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &flags, 1, PMIX_UINT16))){
+            PRTE_ERROR_LOG(ret);
+            return ret;
+        }    
+    
+    
+        for(n = 0; n < parray->size; n++){
+            prte_proc_t *prte_proc = (prte_proc_t *) pmix_pointer_array_get_item(parray, n);
+            if(NULL != prte_proc){
+                if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &prte_proc->name, 1, PMIX_PROC))){
+                    PRTE_ERROR_LOG(ret);
+                    return ret;
+                }
+            }
+        }
+
+        daemon_procid.rank = i;
+        //prte_rml.send_buffer_nb(&daemon_procid, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
+        PRTE_RML_SEND(ret, daemon_procid.rank, buf, PRTE_RML_TAG_MALLEABILITY);
+    }
+    return ret;
 }
 
 int prte_ophandle_get_num_ops(pmix_info_t *rc_handle, size_t *num_ops){
@@ -667,6 +723,7 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
     pmix_proc_t **member_arrays = NULL;
 
     prte_setop_t *setop;
+    prte_pset_flags_t flags = PRTE_PSET_FLAG_NONE;
 
     bool next = true;
     ret = prte_ophandle_get_num_ops(rc_handle, &num_ops);
@@ -709,13 +766,18 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
             ret = prte_ophandle_set_output(rc_handle, *op_index_end, setop->output_names, setop->n_output_names);
         }
 
-        
+        if(setop->op == PMIX_RES_CHANGE_ADD){
+            flags = flags | PRTE_PSET_FLAG_ADD;
+        }else if(setop->op == PMIX_RES_CHANGE_SUB){
+            flags = flags | PRTE_PSET_FLAG_SUB;
+        }
         
         /* add the pset to our server globals */
         for(i = 0; i < n_op_output; i++){
             pmix_server_pset_t *pset = PMIX_NEW(pmix_server_pset_t);
             pset->name = strdup(setop->output_names[i].data.string);
             pset->num_members = pset_sizes[i];
+            PRTE_FLAG_SET(pset, flags);
             PMIX_PROC_CREATE(pset->members, pset->num_members);
             memcpy(pset->members, member_arrays[i], pset_sizes[i] * sizeof(pmix_proc_t));
             pmix_list_append(&prte_pmix_server_globals.psets, &pset->super);
@@ -754,7 +816,11 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
                     PRTE_ERROR_LOG(ret);
                     return ret;
                 }
-
+                /* pack the PSet flags */
+                if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &flags, 1, PMIX_UINT16))){
+                    PRTE_ERROR_LOG(ret);
+                    return ret;
+                }
                 /* pack the procs */
                 size_t proc;
                 for(proc = 0; proc < pset_sizes[i]; proc++){
