@@ -1605,8 +1605,8 @@ void pmix_server_define_pset_op(int status, pmix_proc_t *sender, pmix_data_buffe
             str_len = snprintf( NULL, 0, "%d", dummy_name_ctr);
             suffix = (char *) malloc( str_len + 1 );   
             snprintf( suffix, str_len + 1, "%d", dummy_name_ctr);
-
-            output[i].data.string = malloc(str_len + strlen(prte_pset_base_name));
+            dummy_name_ctr++;
+            output[i].data.string = malloc(str_len + strlen(prte_pset_base_name) + 1);
             strcpy(output[i].data.string, prte_pset_base_name);
             strcat(output[i].data.string, suffix);
             free(suffix);
@@ -1665,7 +1665,7 @@ void pmix_server_define_pset_op(int status, pmix_proc_t *sender, pmix_data_buffe
     }
     PMIX_DATA_ARRAY_FREE(array_of_member_arrays); 
 
-    printf("send to sender\n");
+    printf("PRRTE send to sender\n");
     /* send it back to the sender */
     //prte_rml.send_buffer_nb(sender, buf_resp, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
     PRTE_RML_SEND(ret, sender->rank, buf_resp, PRTE_RML_TAG_MALLEABILITY);
@@ -1725,7 +1725,6 @@ void pmix_server_define_pset_op(int status, pmix_proc_t *sender, pmix_data_buffe
     goto CLEANUP;
 
 ERROR:
-    //printf("error\n");
     /* send a special CLIENT_PSET_OP msg to the sender indicating failure */
     PMIX_DATA_BUFFER_CREATE(buf_resp);
     pmix_psetop_directive_t null_directive = PMIX_PSETOP_NULL;
@@ -1779,25 +1778,30 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
 
     /* unpack the directive */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &directive, &n, PMIX_UINT8))){
+        printf("go to error 1\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
     if(PMIX_PSETOP_NULL == directive){
+        printf("go to error 2\n");
         goto ERROR;
     }
     /* unpack the room number of the senders req tracker */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &room_num, &n, PMIX_INT))){
+        printf("go to error 3\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
     /* unpack the info objects */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &_ninfo, &n, PMIX_SIZE))){
+        printf("go to error 4\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }    
     ninfo = (int32_t) _ninfo;
     PMIX_INFO_CREATE(pset_op_info, ninfo);
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, pset_op_info, &ninfo, PMIX_INFO))){
+        printf("go to error 5\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
@@ -1813,6 +1817,7 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     PMIX_DATA_ARRAY_CONSTRUCT(&pset_procs_darray, noutput, PMIX_DATA_ARRAY);
     /* unpack the array of pset membership arrays */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &pset_procs_darray, &n, PMIX_DATA_ARRAY))){
+        printf("go to error 6\n");
         PMIX_DATA_ARRAY_DESTRUCT(&pset_procs_darray);
         PRTE_ERROR_LOG(ret);
         goto ERROR;
@@ -1852,9 +1857,7 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     prte_pmix_info_caddy_t *cd = malloc(sizeof(prte_pmix_info_caddy_t));
     cd->info = reply;
     cd->ninfo = 2;
-
     req->psopcbfunc(PMIX_SUCCESS, directive, reply, 2, req->cbdata, prte_pmix_info_relfn, cd);
-
     /* everything worked fine, now cleanup and exit */
     goto CLEANUP;
 
@@ -1863,7 +1866,7 @@ ERROR:
     if(room_num == INT_MIN){
         goto CLEANUP;
     }
-
+    printf("send server failed request\n");
     /* we can at least call the callback to inform the pmix_server about the error */
     pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, (void **) &req);
     req->psopcbfunc(PMIX_ERR_SERVER_FAILED_REQUEST, PMIX_PSETOP_NULL, NULL, 0, req->cbdata, NULL, NULL);
@@ -2283,6 +2286,7 @@ void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_
 void pmix_server_alloc_req_respond_new(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer, prte_rml_tag_t tg, void *cbdata){
 
     int ret, room_number, cnt, j, k, m, n, num_ops;
+    pmix_status_t req_status;
     size_t cb_ninfo = 0, ninput = 0, noutput = 0;
     char *alloc_id = NULL;
     
@@ -2292,11 +2296,17 @@ void pmix_server_alloc_req_respond_new(int status, pmix_proc_t *sender, pmix_dat
     pmix_data_array_t *output_names;
     
     prte_pmix_server_op_caddy_t *rcd;
-    
-
     cb_ninfo = 0;
 
     cnt = 1;
+
+    /* Get the status of the allocation request */
+    ret = PMIx_Data_unpack(NULL, buffer, &req_status, &cnt, PMIX_STATUS);
+    if (PMIX_SUCCESS != ret) {
+        PMIX_ERROR_LOG(ret);
+        return;
+    }
+
     /* Get the room number */
     ret = PMIx_Data_unpack(NULL, buffer, &room_number, &cnt, PMIX_INT);
     if (PMIX_SUCCESS != ret) {
@@ -2318,6 +2328,7 @@ void pmix_server_alloc_req_respond_new(int status, pmix_proc_t *sender, pmix_dat
         PMIX_ERROR_LOG(ret);
         goto REPLY;
     }
+
     cb_ninfo++;
     /* TODO: use the adjusted rc handle and get ALL output names -> setop_server functions */
     /* Get the alloc_id */
@@ -2355,7 +2366,7 @@ REPLY:
     rcd->ninfo = cb_ninfo;
 
     /* Call back into the PMIx server*/
-    req->infocbfunc(ret, cb_info, cb_ninfo, req->cbdata, info_cb_release, rcd);
+    req->infocbfunc(req_status, cb_info, cb_ninfo, req->cbdata, info_cb_release, rcd);
 
     /* Cleanup */
 
@@ -2676,7 +2687,6 @@ pmix_status_t pset_operation_fn( const pmix_proc_t *client,
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
-    printf("pset op fn send to hnp\n");
     /* Send the message to our HNP for processing */
     PRTE_RML_SEND(ret, PRTE_PROC_MY_HNP->rank, buf, PRTE_RML_TAG_MALLEABILITY);
 

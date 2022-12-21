@@ -431,15 +431,14 @@ void prte_plm_base_recv(int status, pmix_proc_t *sender, pmix_data_buffer_t *buf
                         if(NULL == (proc = pmix_pointer_array_get_item(jdata->procs, pr))){
                             continue;
                         }
+                        //printf("%s state:prted:track_procs called for proc %s state %s\n, %d: --->found %s\n",
+                        //             PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(&name),
+                        //             prte_proc_state_to_str(state), pr, PRTE_NAME_PRINT(&proc->name));
                         if(proc->name.rank == vpid){
                             found = true;
                             break;
                         }
-                        /*
-                        printf("%s state:prted:track_procs called for proc %s state %s\n, %d: --->found %s\n",
-                                     PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(proc),
-                                     prte_proc_state_to_str(state), pr, PRTE_NAME_PRINT(&pdata->name));
-                        */
+                        
                     }
                     if(!found){
                         proc = NULL;

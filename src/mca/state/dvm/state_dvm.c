@@ -620,6 +620,7 @@ static void check_complete(int fd, short args, void *cbdata)
         PRTE_UPDATE_EXIT_STATUS(jdata->exit_code);
         /* if this is an abnormal termination, report it */
         if (jdata->state > PRTE_JOB_STATE_ERROR) {
+            printf("JOB STATE: %d", jdata->state);
             char *msg;
             msg = prte_dump_aborted_procs(jdata);
             if (NULL != msg) {

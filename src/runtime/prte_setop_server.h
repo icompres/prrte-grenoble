@@ -34,6 +34,7 @@
 #include "src/rml/rml_types.h"
 #include "src/pmix/pmix-internal.h"
 #include "src/prted/pmix/pmix_server_internal.h"
+#include "src/prted/pmix/pmix_server.h"
 
 typedef struct prte_setop{
     pmix_list_item_t super;
@@ -58,6 +59,7 @@ pmix_status_t set_highest_job_rank(pmix_nspace_t nspace, pmix_rank_t highest_ran
 
 int prte_pset_define_from_parray(char *pset_name, pmix_pointer_array_t *parray, prte_pset_flags_t flags);
 
+pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle);
 int prte_ophandle_get_nth_op(pmix_info_t *rc_handle, size_t index, prte_setop_t **setop);
 int prte_ophandle_get_num_ops(pmix_info_t *rc_handle, size_t *num_ops);
 pmix_status_t prte_ophandle_get_output(pmix_info_t *op_handle, pmix_data_array_t **output_names);

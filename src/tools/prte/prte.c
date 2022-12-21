@@ -2242,7 +2242,7 @@ void alloc_response_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninf
     char * alloc_id = NULL;
     info_release_cbdata * info_cbdata = (info_release_cbdata *)cbdata;
     pmix_data_buffer_t *buffer;
-    pmix_info_t *info_rc_op_handle;
+    pmix_info_t *info_rc_op_handle = NULL;
     
     pmix_proc_t *receiver;
     prte_daemon_cmd_flag_t cmd = PRTE_DYNRES_ALLOC_REQ_RESPOND;
@@ -2277,6 +2277,12 @@ void alloc_response_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninf
         return;
     }
 
+    ret = PMIx_Data_pack(receiver, buffer, &status, 1, PMIX_STATUS);
+    if(ret != PMIX_SUCCESS){
+        PRTE_ERROR_LOG(ret);
+        return;
+    }
+
     ret = PMIx_Data_pack(receiver, buffer, &room_number, 1, PMIX_INT);
         if(ret != PMIX_SUCCESS){
         PRTE_ERROR_LOG(ret);
@@ -2294,14 +2300,15 @@ void alloc_response_cbfunc(pmix_status_t status, pmix_info_t info[], size_t ninf
         PRTE_ERROR_LOG(ret);
         return;
     }
+
     
     /* Send alloc response command to daemon -> pmix_server_gen.c */
-    PRTE_RML_SEND(ret, receiver->rank, buffer, PRTE_RML_TAG_MALLEABILITY);
+    PRTE_RML_SEND(status, receiver->rank, buffer, PRTE_RML_TAG_MALLEABILITY);
 
     /* Free the callback data (also frees the input info objects)*/
-    if(NULL != info_cbdata->info){
-        PMIX_INFO_FREE(info_cbdata->info, info_cbdata->ninfo);
-    }
+    //if(NULL != info_cbdata->info){
+    //    PMIX_INFO_FREE(info_cbdata->info, info_cbdata->ninfo);
+    //}
     free(alloc_id);
     free(info_cbdata);
 }
@@ -2341,10 +2348,10 @@ static void _rchandler_new(int sd, short args, void *cbdata)
 
     init_add_timing(master_timing_list, (void **) &cur_master_timing_frame, sizeof(timing_frame_master_t));
     
-    if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
-        scd->evncbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, NULL, NULL, cbdata);
-        return;
-    }
+    //if(0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
+    //    scd->infocbfunc(PMIX_ERR_BAD_PARAM, NULL, 0, scd->cbdata, NULL, NULL);
+    //    return;
+    //}
 
 
     /* 1. check the provided info */
@@ -2360,10 +2367,19 @@ static void _rchandler_new(int sd, short args, void *cbdata)
         }
     }
 
-    
+    /* Check if this is a valid op_handle */
+    if(PMIX_SUCCESS != (rc = prte_op_handle_verify(info_rc_op_handle))){
+        surrender_reservation(reservation_number);
+        if(NULL != scd->infocbfunc){
+            scd->infocbfunc(rc, NULL, 0, scd->cbdata, NULL, NULL);
+        }
+        return;
+    }
+
     /* 2. Execute the set operations: Creates the new PSets */
     rc = ophandle_execute(*client_ptr, info_rc_op_handle, 0, &end_index);
     if(rc != PMIX_SUCCESS){
+        surrender_reservation(reservation_number);
         if(NULL != scd->infocbfunc){
             scd->infocbfunc(rc, NULL, 0, scd->cbdata, NULL, NULL);
         }
@@ -2385,7 +2401,6 @@ static void _rchandler_new(int sd, short args, void *cbdata)
             PRTE_ERROR_LOG(rc);
             return;
         }
-
         if(PMIX_RES_CHANGE_ADD == setop->op){
             setup_resource_add_new(*client_ptr, setop->output_names[0].data.string, reservation_number);
             ++num_add;
@@ -2405,7 +2420,6 @@ static void _rchandler_new(int sd, short args, void *cbdata)
     }
 
     /****** Then do the subtractions. We need to keep the last job_data_oject */
-
     for(n = 0; n < num_ops; n++){
 
         rc = prte_ophandle_get_nth_op(info_rc_op_handle, n++, &setop);
@@ -2434,9 +2448,9 @@ static void _rchandler_new(int sd, short args, void *cbdata)
     if(0 == num_add + num_sub){
         if(NULL != scd->infocbfunc){
             scd->infocbfunc(PMIX_SUCCESS, NULL, 0, scd->cbdata, NULL, NULL);
-        } 
+        }
+        return; 
     }
-    
     
     /* 4. SUB: retrieve the data needed by the "launcher" && send "launch" command to daemons
      * When removing procs we need to do this before we make the query info available
@@ -2684,8 +2698,9 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
     /* Step 3: If they want to release resources proceed to execute the resource change (alloc_cb) 
      * We will communicate with the scheduler once the processes on the resources have terminated.
      */
-    if(PMIX_RES_CHANGE_SUB == rc_type){
 
+    if(PMIX_RES_CHANGE_ADD != rc_type){
+        
         /* No info provided so no release func needed */
         alloc_cbfunc(PMIX_SUCCESS, NULL, 0, alloc_cbdata, NULL, NULL);
         return;
@@ -2747,7 +2762,7 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
 
         return;
     }
-
+    exit(1);
     /* Step 5:
      * We could not satisfy the request using our own resources, so we ask the scheduler for help
      * Send an allocation request to the scheduler. The alloc_cb will be triggered once the scheduler responds

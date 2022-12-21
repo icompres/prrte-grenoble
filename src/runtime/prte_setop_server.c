@@ -283,6 +283,48 @@ int prte_ophandle_get_nth_op(pmix_info_t *rc_handle, size_t index, prte_setop_t 
     return PMIX_SUCCESS;
 }
 
+pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle){
+    size_t num_ops, n, k, j;
+    int rc;
+    prte_setop_t *setop;
+    prte_res_change_t *res_change;
+
+    if(PMIX_SUCCESS != prte_ophandle_get_num_ops(op_handle, &num_ops)){
+        return rc;
+    }
+
+    for(n = 0; n < num_ops; n++){
+        if(PMIX_SUCCESS != prte_ophandle_get_nth_op(op_handle, n, &setop)){
+            return rc;
+        }
+
+        if((PMIX_RES_CHANGE_ADD == setop->op || PMIX_RES_CHANGE_SUB == setop->op || PMIX_RES_CHANGE_REPLACE == setop->op) && 
+            0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes))
+        {
+            PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+                for(k = 0; k < res_change->num_assoc_psets; k++){
+                    for(j = 0; j < setop->n_input_names; j++){
+                        if(0 == strcmp(res_change->assoc_psets[k], setop->input_names[j].data.string)){
+                            PMIX_RELEASE(setop);
+                            return PMIX_ERR_EXISTS;
+                        }
+                    }
+                }
+                for(k = 0; k < res_change->num_rc_psets; k++){
+                    for(j = 0; j < setop->n_input_names; j++){
+                        if(0 == strcmp(res_change->rc_psets[k], setop->input_names[j].data.string)){
+                            PMIX_RELEASE(setop);
+                            return PMIX_ERR_EXISTS;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return PMIX_SUCCESS;
+
+}
+
 pmix_status_t prte_ophandle_get_output(pmix_info_t *op_handle, pmix_data_array_t **output_names){
     size_t n, k, idx = 0, n_output = 0, num_ops = 0;
     pmix_status_t ret;
@@ -300,6 +342,7 @@ pmix_status_t prte_ophandle_get_output(pmix_info_t *op_handle, pmix_data_array_t
             return ret;
         }
         n_output += setop->n_output_names;
+        PMIX_RELEASE(setop);
     }
 
     PMIX_DATA_ARRAY_CREATE(*output_names, n_output, PMIX_VALUE);
@@ -313,6 +356,7 @@ pmix_status_t prte_ophandle_get_output(pmix_info_t *op_handle, pmix_data_array_t
         for(k = 0; k < setop->n_output_names; k++){
            PMIX_VALUE_LOAD(&val_ptr[idx++], setop->output_names[k].data.string, PMIX_STRING);
         }
+        PMIX_RELEASE(setop);
     }
     return PMIX_SUCCESS;
 }
@@ -706,6 +750,7 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
     pmix_data_buffer_t *buf;
     pmix_rank_t r;
     pmix_psetop_directive_t op = PMIX_PSETOP_NULL;
+    pmix_server_pset_t *pset;
 
     size_t ninput = 0;
     char **input_psets = NULL;
@@ -746,7 +791,12 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
             continue;
         }
         /* Execute the specified operation */
-        set_op_exec(client, setop, &n_op_output, &member_arrays, &pset_sizes);
+        ret = set_op_exec(client, setop, &n_op_output, &member_arrays, &pset_sizes);
+        if(PMIX_SUCCESS != ret){
+            PRTE_ERROR_LOG(ret);
+            return ret;
+        }
+        
 
         /* Assign output names if not given */
         char * prefix;
@@ -763,7 +813,18 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
                 strcat(setop->output_names[i].data.string, suffix);
                 free(suffix);
             }
-            ret = prte_ophandle_set_output(rc_handle, *op_index_end, setop->output_names, setop->n_output_names);
+            
+            if(PMIX_SUCCESS != (ret = prte_ophandle_set_output(rc_handle, *op_index_end, setop->output_names, setop->n_output_names))){
+                PRTE_ERROR_LOG(ret);
+                PMIX_RELEASE(setop);
+                return ret;
+            }
+            PMIX_VALUE_FREE(setop->output_names, setop->n_output_names);
+            PMIX_RELEASE(setop);
+            if(PMIX_SUCCESS != (ret = prte_ophandle_get_nth_op(rc_handle, *op_index_end, &setop))){
+                PRTE_ERROR_LOG(ret);
+                return ret;
+            }
         }
 
         if(setop->op == PMIX_RES_CHANGE_ADD){
@@ -774,12 +835,14 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
         
         /* add the pset to our server globals */
         for(i = 0; i < n_op_output; i++){
-            pmix_server_pset_t *pset = PMIX_NEW(pmix_server_pset_t);
+            pset = PMIX_NEW(pmix_server_pset_t);
             pset->name = strdup(setop->output_names[i].data.string);
             pset->num_members = pset_sizes[i];
+
             PRTE_FLAG_SET(pset, flags);
             PMIX_PROC_CREATE(pset->members, pset->num_members);
             memcpy(pset->members, member_arrays[i], pset_sizes[i] * sizeof(pmix_proc_t));
+
             pmix_list_append(&prte_pmix_server_globals.psets, &pset->super);
             /* also pass it down to the pmix_server */
             PMIx_server_define_process_set(member_arrays[i], pset_sizes[i], setop->output_names[i].data.string);
@@ -830,15 +893,13 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
                         return ret;
                     }
                 }
-                //printf("send to others\n");
-                //prte_rml.send_buffer_nb(&target, buf_all, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
                 PRTE_RML_SEND(ret, target.rank, buf, PRTE_RML_TAG_MALLEABILITY);
             }
         }
         
         PMIX_RELEASE(setop);
     }
-
+    
     return PMIX_SUCCESS;
 } 
 
@@ -898,6 +959,17 @@ pmix_status_t prte_ophandle_inform_daemons(pmix_info_t *info_rc_op_handle, pmix_
             ret = PMIx_Data_pack(NULL, buf2, &ninput, 1, PMIX_INT32);
 
             ret = PMIx_Data_pack(NULL, buf2, input_psets, ninput, PMIX_STRING);
+
+            /* No need to go through the send/recv for ourself.
+             * At this point we are inside of an event so also no need to go through the event lib.
+             * We can directly call the handler
+             */
+            if(k == PRTE_PROC_MY_NAME->rank){
+                pmix_server_dynres(ret, PRTE_PROC_MY_NAME, buf2, PRTE_RML_TAG_MALLEABILITY, NULL);
+                PMIX_DATA_BUFFER_RELEASE(buf2);
+                continue;
+            }
+
             //prte_rml.send_buffer_nb(&daemon_procid, buf2, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
             PRTE_RML_SEND(ret, daemon_procid.rank, buf2, PRTE_RML_TAG_MALLEABILITY);
         }

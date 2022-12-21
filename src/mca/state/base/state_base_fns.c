@@ -729,7 +729,7 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         }
         /* track job status & resource change status */
         jdata->num_terminated++;
-        //printf("%d of %d in the job terminated\n", jdata->num_terminated, jdata->num_procs);
+        //printf("Proc %s (%d of %d) in the job terminated\n", PRTE_NAME_PRINT(&pdata->name), jdata->num_terminated, jdata->num_procs);
 
         size_t p;
         prte_res_change_t *res_change;
