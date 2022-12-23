@@ -1588,7 +1588,7 @@ void pmix_server_define_pset_op(int status, pmix_proc_t *sender, pmix_data_buffe
 
     /* get a name for the new pset based on client pref */
     //get_new_pset_name(&pset_result_name);
-    printf("pset op exec\n");
+
     /* ------------------------------------*/
     /* perform the pset operation */
     if(PMIX_SUCCESS!= (ret = pset_op_exec(directive, input_names, ninput, NULL, 0, &n_op_output, &result_pset_members, &pset_sizes))){
@@ -1665,7 +1665,6 @@ void pmix_server_define_pset_op(int status, pmix_proc_t *sender, pmix_data_buffe
     }
     PMIX_DATA_ARRAY_FREE(array_of_member_arrays); 
 
-    printf("PRRTE send to sender\n");
     /* send it back to the sender */
     //prte_rml.send_buffer_nb(sender, buf_resp, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
     PRTE_RML_SEND(ret, sender->rank, buf_resp, PRTE_RML_TAG_MALLEABILITY);
@@ -1774,34 +1773,27 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     pmix_value_t *input, *output;
     pmix_data_array_t pset_procs_darray;
 
-    printf("client define pset op resp\n");
-
     /* unpack the directive */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &directive, &n, PMIX_UINT8))){
-        printf("go to error 1\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
     if(PMIX_PSETOP_NULL == directive){
-        printf("go to error 2\n");
         goto ERROR;
     }
     /* unpack the room number of the senders req tracker */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &room_num, &n, PMIX_INT))){
-        printf("go to error 3\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
     /* unpack the info objects */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &_ninfo, &n, PMIX_SIZE))){
-        printf("go to error 4\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }    
     ninfo = (int32_t) _ninfo;
     PMIX_INFO_CREATE(pset_op_info, ninfo);
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, pset_op_info, &ninfo, PMIX_INFO))){
-        printf("go to error 5\n");
         PRTE_ERROR_LOG(ret);
         goto ERROR;
     }
@@ -1817,7 +1809,6 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     PMIX_DATA_ARRAY_CONSTRUCT(&pset_procs_darray, noutput, PMIX_DATA_ARRAY);
     /* unpack the array of pset membership arrays */
     if(PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &pset_procs_darray, &n, PMIX_DATA_ARRAY))){
-        printf("go to error 6\n");
         PMIX_DATA_ARRAY_DESTRUCT(&pset_procs_darray);
         PRTE_ERROR_LOG(ret);
         goto ERROR;
@@ -1831,7 +1822,7 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
         pmix_server_pset_t *pset = PMIX_NEW(pmix_server_pset_t);
         pset->name = strdup(output[i].data.string);
         pset->num_members = nmembers;
-        PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_NONE);
+        prte_pset_set_flags(pset, directive);
         PMIX_PROC_CREATE(pset->members, pset->num_members);
         memcpy(pset->members, pset_procs, nmembers * sizeof(pmix_proc_t));
         pmix_list_append(&prte_pmix_server_globals.psets, &pset->super);
@@ -1839,7 +1830,6 @@ void pmix_server_client_define_pset_op(int status, pmix_proc_t *sender, pmix_dat
     /* call the callback function to release th client */
     pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, (void **) &req);
     if(NULL == req){
-        printf("req == NULL for room num %d!\n", room_num);
         goto CLEANUP;
     }
     
@@ -1866,7 +1856,6 @@ ERROR:
     if(room_num == INT_MIN){
         goto CLEANUP;
     }
-    printf("send server failed request\n");
     /* we can at least call the callback to inform the pmix_server about the error */
     pmix_hotel_checkout_and_return_occupant(&prte_pmix_server_globals.reqs, room_num, (void **) &req);
     req->psopcbfunc(PMIX_ERR_SERVER_FAILED_REQUEST, PMIX_PSETOP_NULL, NULL, 0, req->cbdata, NULL, NULL);
@@ -2109,7 +2098,7 @@ pmix_status_t update_job_data_sub(prte_res_change_t *res_change){
 /* Make the specified resource change unavailable for queries from the local clients */
 void pmix_server_unpublish_res_change(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
                                prte_rml_tag_t tg, void *cbdata){
-    int n = 1, ret;
+    int n = 1, ret, flag = 0;
     bool non_default=true;
     prte_res_change_t *res_change = NULL, *res_change_next = NULL;
     char *rc_pset = (char*) malloc(PMIX_MAX_KEYLEN);
@@ -2126,34 +2115,50 @@ void pmix_server_unpublish_res_change(int status, pmix_proc_t *sender, pmix_data
     }
     /* find the specified resource change in the local server globals and remove it */
     PMIX_LIST_FOREACH_SAFE(res_change, res_change_next, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-        if(0 == strcmp(rc_pset, res_change->rc_psets[0])){
+        for(n = 0; n < res_change->num_rc_psets; n++){
+            if(0 == strcmp(rc_pset, res_change->rc_psets[n])){
+                flag = 1;
+                break;
+            }
+        }
+        if(!flag){
+            for(n = 0; n < res_change->num_assoc_psets; n++){
+                if(0 == strcmp(rc_pset, res_change->assoc_psets[n])){
+                    flag = 1;
+                    break;
+                }
+            }
+        }
+
+        if(!flag){
+            continue;
+        }
+
+        
+        if(PMIX_RES_CHANGE_ADD == res_change->rc_type){
 
             res_change->queryable = false;
+            pmix_list_remove_item(&prte_pmix_server_globals.res_changes, &res_change->super);
+            make_timestamp_base(&cur_daemon_timing_frame->rc_end);
+            make_timestamp_root(&cur_master_timing_frame->rc_end2);
 
-            if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
-                
-                /* Notify local clients */
-                pmix_info_t *event_info;
-                PMIX_INFO_CREATE(event_info, 2);
-                (void)snprintf(event_info[0].key, PMIX_MAX_KEYLEN, "%s", PMIX_EVENT_NON_DEFAULT);
-                PMIX_VALUE_LOAD(&event_info[0].value, &non_default, PMIX_BOOL);
-                (void)snprintf(event_info[1].key, PMIX_MAX_KEYLEN, "%s", PMIX_PSET_NAME);
-                PMIX_VALUE_LOAD(&event_info[1].value, rc_pset, PMIX_STRING);
-                ret = PMIx_Notify_event(PMIX_RC_FINALIZED, NULL, PMIX_RANGE_LOCAL, event_info, 2, NULL, NULL);
-                PMIX_INFO_FREE(event_info, 2);
-
-            }else{
-
-                pmix_list_remove_item(&prte_pmix_server_globals.res_changes, &res_change->super);
-                make_timestamp_base(&cur_daemon_timing_frame->rc_end);
-                make_timestamp_root(&cur_master_timing_frame->rc_end2);
-            }
-            break;
+            /* Notify local clients */
+            pmix_info_t *event_info;
+            PMIX_INFO_CREATE(event_info, 2);
+            (void)snprintf(event_info[0].key, PMIX_MAX_KEYLEN, "%s", PMIX_EVENT_NON_DEFAULT);
+            PMIX_VALUE_LOAD(&event_info[0].value, &non_default, PMIX_BOOL);
+            (void)snprintf(event_info[1].key, PMIX_MAX_KEYLEN, "%s", PMIX_PSET_NAME);
+            PMIX_VALUE_LOAD(&event_info[1].value, rc_pset, PMIX_STRING);
+            ret = PMIx_Notify_event(PMIX_RC_FINALIZED, NULL, PMIX_RANGE_LOCAL, event_info, 2, NULL, NULL);
+            PMIX_INFO_FREE(event_info, 2);
         }
+        break;
+        
     }
 
+
+
     free(rc_pset);
-    
     
 }
 
@@ -2237,7 +2242,7 @@ void pmix_server_local_finalization_reported(int status, pmix_proc_t *sender, pm
 
 void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffer,
                                prte_rml_tag_t tg, void *cbdata){
-    int n = 1, p, ret;
+    int n = 1, p, ret, flag = 0;
     size_t nprocs;
     pmix_data_buffer_t *buf;
     bool non_default=true;
@@ -2255,10 +2260,39 @@ void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_
     }
     /* find the specified resource change in the local server globals, update job data and remove it */
     PMIX_LIST_FOREACH_SAFE(res_change, res_change_next, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-        if(0 == strcmp(rc_pset, res_change->rc_psets[0])){
+            if(0 == strcmp(rc_pset, res_change->rc_psets[0])){
+                        for(n = 0; n < res_change->num_rc_psets; n++){
+                if(0 == strcmp(rc_pset, res_change->rc_psets[n])){
+                    flag = 1;
+                    break;
+                }
+            }
+            if(!flag){
+                for(n = 0; n < res_change->num_assoc_psets; n++){
+                    if(0 == strcmp(rc_pset, res_change->assoc_psets[n])){
+                        flag = 1;
+                        break;
+                    }
+                }
+            }
+    
+            if(!flag){
+                continue;
+            }
 
             if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
+                
                 update_job_data_sub(res_change);
+
+                pmix_info_t *event_info;
+                PMIX_INFO_CREATE(event_info, 2);
+                (void)snprintf(event_info[0].key, PMIX_MAX_KEYLEN, "%s", PMIX_EVENT_NON_DEFAULT);
+                PMIX_VALUE_LOAD(&event_info[0].value, &non_default, PMIX_BOOL);
+                (void)snprintf(event_info[1].key, PMIX_MAX_KEYLEN, "%s", PMIX_PSET_NAME);
+                PMIX_VALUE_LOAD(&event_info[1].value, rc_pset, PMIX_STRING);
+                ret = PMIx_Notify_event(PMIX_RC_FINALIZED, NULL, PMIX_RANGE_LOCAL, event_info, 2, NULL, NULL);
+                PMIX_INFO_FREE(event_info, 2);
+
             }
             pmix_list_remove_item(&prte_pmix_server_globals.res_changes, &res_change->super);
             make_timestamp_root(&cur_master_timing_frame->rc_end2);

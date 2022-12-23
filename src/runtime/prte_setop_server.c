@@ -301,6 +301,7 @@ pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle){
         if((PMIX_RES_CHANGE_ADD == setop->op || PMIX_RES_CHANGE_SUB == setop->op || PMIX_RES_CHANGE_REPLACE == setop->op) && 
             0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes))
         {
+            return PMIX_ERR_EXISTS;
             PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
                 for(k = 0; k < res_change->num_assoc_psets; k++){
                     for(j = 0; j < setop->n_input_names; j++){
@@ -738,6 +739,50 @@ pmix_status_t pset_op_exec(pmix_psetop_directive_t directive, char **input_psets
 
     return ret;
 }
+pmix_psetop_directive_t prte_pset_get_op(pmix_server_pset_t *pset){
+    if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_ADD)){
+        return PMIX_RES_CHANGE_ADD;
+    }
+    if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_SUB)){
+        return PMIX_RES_CHANGE_SUB;
+    }
+    if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_UNION)){
+        return PMIX_PSETOP_UNION;
+    }
+    if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_DIFFERENCE)){
+        return PMIX_PSETOP_DIFFERENCE;
+    }
+    if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_INTERSECTION)){
+        return PMIX_PSETOP_INTERSECTION;
+    }
+
+    return PMIX_PSETOP_NULL;
+}
+
+void prte_pset_set_flags(pmix_server_pset_t *pset, pmix_psetop_directive_t op){
+    switch(op){
+        case PMIX_RES_CHANGE_ADD:
+            PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_ADD);
+            return;
+        case PMIX_RES_CHANGE_SUB:
+            PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_SUB);
+            return;
+        case PMIX_PSETOP_UNION:
+            PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_UNION);
+            return;
+        case PMIX_PSETOP_DIFFERENCE:
+            PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_DIFFERENCE);
+            return;
+        case PMIX_PSETOP_INTERSECTION:
+            PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_INTERSECTION);
+            return;
+    }
+}
+
+void setop_pub_cbfunc(pmix_status_t status, void *cbdata){
+    PRTE_ERROR_LOG(status);
+    exit(1);
+}
 
 int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index_start, size_t *op_index_end){
     size_t n, k, m, i, num_ops;
@@ -746,11 +791,13 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
     char * suffix;
 
     pmix_value_t * val_ptr;
-    pmix_info_t *info, *info1, *info2, *info3;
     pmix_data_buffer_t *buf;
     pmix_rank_t r;
     pmix_psetop_directive_t op = PMIX_PSETOP_NULL;
     pmix_server_pset_t *pset;
+
+    size_t ninfo = 0;
+    pmix_info_t *info = NULL;
 
     size_t ninput = 0;
     char **input_psets = NULL;
@@ -827,32 +874,27 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
             }
         }
 
-        if(setop->op == PMIX_RES_CHANGE_ADD){
-            flags = flags | PRTE_PSET_FLAG_ADD;
-        }else if(setop->op == PMIX_RES_CHANGE_SUB){
-            flags = flags | PRTE_PSET_FLAG_SUB;
-        }
         
         /* add the pset to our server globals */
         for(i = 0; i < n_op_output; i++){
+
             pset = PMIX_NEW(pmix_server_pset_t);
             pset->name = strdup(setop->output_names[i].data.string);
             pset->num_members = pset_sizes[i];
 
-            PRTE_FLAG_SET(pset, flags);
+            prte_pset_set_flags(pset, setop->op);
             PMIX_PROC_CREATE(pset->members, pset->num_members);
             memcpy(pset->members, member_arrays[i], pset_sizes[i] * sizeof(pmix_proc_t));
 
             pmix_list_append(&prte_pmix_server_globals.psets, &pset->super);
             /* also pass it down to the pmix_server */
             PMIx_server_define_process_set(member_arrays[i], pset_sizes[i], setop->output_names[i].data.string);
-        }
         
-        /* send a PSET_DEFINE msg to all deamons, excluding ourself */
-        prte_job_t *daemon_job = prte_get_job_data_object(PRTE_PROC_MY_PROCID->nspace);
-        pmix_proc_t target;
-        PMIX_LOAD_PROCID(&target, PRTE_PROC_MY_HNP->nspace, 0);
-        for(i = 0; i < n_op_output; i++){
+            /* send a PSET_DEFINE msg to all deamons, excluding ourself */
+            prte_job_t *daemon_job = prte_get_job_data_object(PRTE_PROC_MY_PROCID->nspace);
+            pmix_proc_t target;
+            PMIX_LOAD_PROCID(&target, PRTE_PROC_MY_HNP->nspace, 0);
+
             for(r = 0; r < daemon_job->num_procs; r++){
                 target.rank = r;
 
@@ -880,7 +922,7 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
                     return ret;
                 }
                 /* pack the PSet flags */
-                if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &flags, 1, PMIX_UINT16))){
+                if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &pset->flags, 1, PMIX_UINT16))){
                     PRTE_ERROR_LOG(ret);
                     return ret;
                 }
@@ -894,6 +936,18 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
                     }
                 }
                 PRTE_RML_SEND(ret, target.rank, buf, PRTE_RML_TAG_MALLEABILITY);
+            }
+        }
+
+        /* publish the PSet data */
+        if(0 < setop->npset_info_arrays){
+            for(n = 0; n < setop->npset_info_arrays; n++){
+                info = (pmix_info_t *) setop->pset_info_arrays[n]->array;
+                ninfo = setop->pset_info_arrays[n]->size;
+
+                if(0 < ninfo){
+                    pmix_server_publish_fn(PRTE_PROC_MY_NAME, info, ninfo, setop_pub_cbfunc, NULL);
+                }
             }
         }
         

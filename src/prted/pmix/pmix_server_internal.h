@@ -370,11 +370,12 @@ typedef uint16_t prte_pset_flags_t;
 #define PRTE_PSET_FLAG_NONE             0x0000 // none
 #define PRTE_PSET_FLAG_ADD              0x0001 // pset represents a resource addition
 #define PRTE_PSET_FLAG_SUB              0x0004 // pset represents a resource substraction
+
+#define PRTE_PSET_FLAG_UNION            0x0008 // pset represents an union operation
+#define PRTE_PSET_FLAG_DIFFERENCE       0x0020 // pset represents a difference operation
+#define PRTE_PSET_FLAG_INTERSECTION     0x0040 // pset represents an intersection operation
+#define PRTE_PSET_FLAG_ORIGIN           0x0080 // pset is the origin pset of a job
 /*
-#define PRTE_JOB_FLAG_ABORTED           0x0008 // did this job abort?
-#define PRTE_JOB_FLAG_FORWARD_OUTPUT    0x0020 // forward output from the apps
-#define PRTE_JOB_FLAG_DO_NOT_MONITOR    0x0040 // do not monitor apps for termination
-#define PRTE_JOB_FLAG_FORWARD_COMM      0x0080 //
 #define PRTE_JOB_FLAG_RECOVERABLE       0x0100 // job is recoverable
 #define PRTE_JOB_FLAG_RESTART           0x0200 //
 #define PRTE_JOB_FLAG_PROCS_MIGRATING   0x0400 // some procs in job are migrating from one node to another

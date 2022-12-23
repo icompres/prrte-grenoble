@@ -1093,7 +1093,7 @@ int main(int argc, char *argv[])
     /* create a pset for the job */
     char *pset_name = strdup("RM://jobs/0");
     pmix_pointer_array_t *pset_procs_parray = prte_get_job_data_object(spawnednspace)->procs;
-    prte_pset_define_from_parray(pset_name, pset_procs_parray, PRTE_PSET_FLAG_ADD); 
+    prte_pset_define_from_parray(pset_name, pset_procs_parray, PRTE_PSET_FLAG_ORIGIN); 
     free(pset_name);
 
     //printf("\nPRRTE HNP Server pid:\n %lu\n\n", (unsigned long) getpid());

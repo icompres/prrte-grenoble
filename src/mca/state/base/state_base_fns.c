@@ -729,11 +729,13 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         }
         /* track job status & resource change status */
         jdata->num_terminated++;
-        //printf("Proc %s (%d of %d) in the job terminated\n", PRTE_NAME_PRINT(&pdata->name), jdata->num_terminated, jdata->num_procs);
 
         size_t p;
         prte_res_change_t *res_change;
         PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+            if(res_change->rc_type != PMIX_RES_CHANGE_SUB && res_change->rc_type != PMIX_RES_CHANGE_REPLACE){
+                continue;
+            }
             pmix_server_pset_t *pset;
             PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
                 /* Note: So far the first delat pset always is the subtraction (in case of replace)*/
@@ -781,7 +783,6 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
                 free(rc_pset);
             }
         }
-
         if (jdata->num_terminated == jdata->num_procs) {
             /* if requested, check fd status for leaks */
             if (prte_state_base_run_fdcheck) {
@@ -797,7 +798,6 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         } else if (PRTE_PROC_STATE_TERMINATED < pdata->state && !prte_job_term_ordered) {
             /* if this was an abnormal term, notify the other procs of the termination */
             PMIX_LOAD_PROCID(&parent, jdata->nspace, PMIX_RANK_WILDCARD);
-
             /* if ft prte is enabled, a PMIx event has already been produced
              * and this is redundant. */
             if (!prte_enable_ft) {

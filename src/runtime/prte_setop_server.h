@@ -58,6 +58,8 @@ void setop_server_close();
 pmix_status_t set_highest_job_rank(pmix_nspace_t nspace, pmix_rank_t highest_rank);
 
 int prte_pset_define_from_parray(char *pset_name, pmix_pointer_array_t *parray, prte_pset_flags_t flags);
+void prte_pset_set_flags(pmix_server_pset_t *pset, pmix_psetop_directive_t op);
+pmix_psetop_directive_t prte_pset_get_op(pmix_server_pset_t *pset);
 
 pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle);
 int prte_ophandle_get_nth_op(pmix_info_t *rc_handle, size_t index, prte_setop_t **setop);

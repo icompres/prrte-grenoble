@@ -543,43 +543,28 @@ void rc_finalize_handler(size_t evhdlr_registration_id, pmix_status_t status,
         return;
     }
 
-    /* If it is a resource substrcation: Do not delete the resource change as we need to wait for clients to finalize */ 
-    prte_res_change_t *res_change;
-    PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-        if(0 == strcmp(res_change->rc_psets[0], rc_pset)){
-            if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
-                break;
-            }
-            exit = false;
-            break;
+    
+    /* send a message all daemons that the res change was finalized */     
+    for(n = 0; n < prte_process_info.num_daemons; n++){   
+        PMIX_DATA_BUFFER_CREATE(buf);
+        /* pack the command */
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &command, 1, PMIX_UINT8))){
+            PMIX_DATA_BUFFER_RELEASE(buf);
+            cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
+            PMIX_ERROR_LOG(ret);
+            return;
         }
-    }
+        /* pack the delta pset name of the resource change */
+        if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &rc_pset, 1, PMIX_STRING))){
+            PMIX_DATA_BUFFER_RELEASE(buf);
+            cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
+            PMIX_ERROR_LOG(ret);
+            return;
+        }
 
-    if(exit){
-        cbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, cbdata);
-        return;
+        /* Send the unpublish message to all daemons */
+        PRTE_RML_SEND(ret, n, buf, PRTE_RML_TAG_MALLEABILITY);
     }
-
-    
-    /* send a message to local daemon (i.e. myself) to delete the resource change */        
-    PMIX_DATA_BUFFER_CREATE(buf);
-    /* pack the command */
-    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &command, 1, PMIX_UINT8))){
-        PMIX_DATA_BUFFER_RELEASE(buf);
-        cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
-        PMIX_ERROR_LOG(ret);
-        return;
-    }
-    /* pack the delta pset name of the resource change */
-    if(PMIX_SUCCESS != (ret = PMIx_Data_pack(NULL, buf, &rc_pset, 1, PMIX_STRING))){
-        PMIX_DATA_BUFFER_RELEASE(buf);
-        cbfunc(ret, NULL, 0, NULL, NULL, cbdata);
-        PMIX_ERROR_LOG(ret);
-        return;
-    }
-    
-    //prte_rml.send_buffer_nb(PRTE_PROC_MY_NAME, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
-    PRTE_RML_SEND(ret, PRTE_PROC_MY_NAME->rank, buf, PRTE_RML_TAG_MALLEABILITY);
     
     cbfunc(PMIX_SUCCESS, NULL, 0, NULL, NULL, cbdata);
 
@@ -1722,7 +1707,7 @@ static void pscon(pmix_server_pset_t *p)
     p->name = NULL;
     p->members = NULL;
     p->num_members = 0;
-    p->flags = 0x0000;
+    p->flags = PRTE_PSET_FLAG_NONE;
 }
 static void psdes(pmix_server_pset_t *p)
 {

@@ -50,11 +50,13 @@
 #include "src/mca/schizo/schizo.h"
 #include "src/mca/state/state.h"
 #include "src/runtime/prte_globals.h"
+#include "src/runtime/prte_setop_server.h"
 #include "src/threads/pmix_threads.h"
 #include "src/util/name_fns.h"
 #include "src/util/pmix_show_help.h"
 
 #include "src/prted/pmix/pmix_server_internal.h"
+
 
 static void qrel(void *cbdata)
 {
@@ -508,7 +510,7 @@ static void _query(int sd, short args, void *cbdata)
                 int flag = 0;
                 PMIX_LIST_FOREACH(ps, &prte_pmix_server_globals.psets, pmix_server_pset_t)
                 {
-                    if(PRTE_FLAG_TEST(ps, PRTE_PSET_FLAG_ADD)){
+                    if(PRTE_FLAG_TEST(ps, PRTE_PSET_FLAG_ADD) || PRTE_FLAG_TEST(ps, PRTE_PSET_FLAG_ORIGIN)){
                         for(k = 0; k < ps->num_members; k++){
                             if(PMIX_CHECK_PROCID(&ps->members[k], qual_proc)){
                                 kv = PMIX_NEW(prte_info_item_t);
@@ -523,7 +525,21 @@ static void _query(int sd, short args, void *cbdata)
                         break;
                     }
                 }
-                
+            }else if (0 == strcmp(q->keys[n], PMIX_PSET_SOURCE_OP)) {
+                pmix_server_pset_t *pset;
+                for(k = 0; k < q->nqual; k++){
+                    if(0 == strcmp(q->qualifiers[k].key, PMIX_PSET_NAME) ){
+                        PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
+                            if(0 == strcmp(pset->name, q->qualifiers[k].value.data.string)){
+                                pmix_psetop_directive_t op = prte_pset_get_op(pset);
+                                kv = PMIX_NEW(prte_info_item_t);
+                                PMIX_INFO_LOAD(&kv->info, PMIX_PSET_SOURCE_OP, &op, PMIX_UINT8);
+                                pmix_list_append(&results[m], &kv->super);
+                                break;
+                            }
+                        }
+                    }
+                }
             }else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSET_NAMES)) {
                 pmix_server_pset_t *ps;
                 ans = NULL;
