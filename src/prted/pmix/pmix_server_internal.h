@@ -401,7 +401,7 @@ typedef struct {
     pmix_list_item_t super;
     char **rc_psets;
     char **assoc_psets;
-    pmix_res_change_type_t rc_type;
+    pmix_psetop_directive_t rc_type;
     size_t nprocs;
     size_t nlocalprocs;
     size_t nlocalprocs_finalized;

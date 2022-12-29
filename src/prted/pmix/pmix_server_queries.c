@@ -525,7 +525,7 @@ static void _query(int sd, short args, void *cbdata)
                         break;
                     }
                 }
-            }else if (0 == strcmp(q->keys[n], PMIX_PSET_SOURCE_OP)) {
+            }else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSET_SOURCE_OP)) {
                 pmix_server_pset_t *pset;
                 for(k = 0; k < q->nqual; k++){
                     if(0 == strcmp(q->qualifiers[k].key, PMIX_PSET_NAME) ){
@@ -533,7 +533,7 @@ static void _query(int sd, short args, void *cbdata)
                             if(0 == strcmp(pset->name, q->qualifiers[k].value.data.string)){
                                 pmix_psetop_directive_t op = prte_pset_get_op(pset);
                                 kv = PMIX_NEW(prte_info_item_t);
-                                PMIX_INFO_LOAD(&kv->info, PMIX_PSET_SOURCE_OP, &op, PMIX_UINT8);
+                                PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSET_SOURCE_OP, &op, PMIX_UINT8);
                                 pmix_list_append(&results[m], &kv->super);
                                 break;
                             }
@@ -593,113 +593,69 @@ static void _query(int sd, short args, void *cbdata)
                 }
             }
             /* Query for resource change information */
-            else if (0 == strcmp(q->keys[n], PMIX_RC_TYPE) || 0 == strcmp(q->keys[n], PMIX_RC_DELTA) || 0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
-                char *rc_pset_qualifier = NULL;
-                char *assoc_pset_qualifier = NULL;
-                int num_requirements = 0;
-                int num_requirements_fullfilled = 0;
-                pmix_proc_t requestor;
+            else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_TYPE) || 0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_OUTPUT) || 0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_INPUT)){
+                char * pset_qualifier = NULL;
+
                 /* If we do not have any resource changes in our list there is nothing we can do*/
                 if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
                     continue;
                 }
 
-                /* Check if they specified a particular delta PSet or associated PSet qualifier */
+                /* Check if they specified a PSet qualifier */
                 for(k=0; k < q->nqual; k++){
-                    if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_DELTA)){ 
-                        rc_pset_qualifier = q->qualifiers[k].value.data.string;
-                        num_requirements = 1;
-
-                    }else if(0 == strcmp(q->qualifiers[k].key, PMIX_RC_ASSOC)){
-                        assoc_pset_qualifier = q->qualifiers[k].value.data.string;
-                        num_requirements = 1;
-                    }else if(0 == strcmp(q->qualifiers[k].key, PMIX_PROCID)){
-                        strcpy(requestor.nspace, q->qualifiers[k].value.data.proc->nspace);
-                        requestor.rank = q->qualifiers[k].value.data.proc->rank;
+                    if(0 == strcmp(q->qualifiers[k].key, PMIX_PSET_NAME)){ 
+                        pset_qualifier = q->qualifiers[k].value.data.string;
+                        break;
                     }
                 }
+
+                /* If they did no specify a pset qualifier ther is nothing we can do */
+                if(NULL == pset_qualifier){
+                    continue;
+                }
+
                 prte_res_change_t *res_change = NULL;
                 int flag = 0;
                 
-                /* If they specified qualifieres we need to search for the right resource change in our list */
-                if(0 < num_requirements){
-                    
-                    PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-                        if(!res_change->queryable){
-                            continue;
-                        }
-
-                        num_requirements_fullfilled = 0;
-
-                        /* They specified the name of the associated PSet as qualifier */
-                        if(NULL != assoc_pset_qualifier){
-                            
-                            /* Need to handle the special case of 'mpi://SELF' separately. We search for the resource change where the requesting proc is included in the delta PSet */
-                            if(0 == strcmp("mpi://SELF", assoc_pset_qualifier)){
-                                pmix_server_pset_t * pset;
-                                bool found = false;
-
-                                PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-                                    for(k = 0; k < res_change->num_rc_psets; k++){
-                                        if(0 == strcmp(pset->name, res_change->rc_psets[k])){
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if(found){
-                                        break;
-                                    }
-                                }
-                                for(k = 0; k < pset->num_members; k++){
-                                    if(PMIX_CHECK_PROCID(&requestor, &pset->members[k])){
-                                        ++num_requirements_fullfilled;
-                                        break;
-                                    }
-                                }
-                            }else{
-                                /* One of the associated psets must match */
-                                for(k = 0; k < res_change->num_assoc_psets; k++){
-                                    if(0 == strcmp(res_change->assoc_psets[k], assoc_pset_qualifier)){
-                                        ++num_requirements_fullfilled;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        /* They specified the name of the delta PSet as qualifier */
-                        if(NULL != rc_pset_qualifier){
-                            for(k = 0; k < res_change->num_rc_psets; k++){
-                                if(0 == strcmp(res_change->rc_psets[k], rc_pset_qualifier)){
-                                    ++num_requirements_fullfilled;
-                                    break;
-                                }
-                            }
-                        }
-
-                        /* Break out if this res change fullfills all requirements*/
-                        if(num_requirements_fullfilled >= num_requirements){
+                /* Search for the right resource change in our list */
+                PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
+                    if(!res_change->queryable){
+                        continue;
+                    }
+                        
+                    /* Check the associated psets */
+                    for(k = 0; k < res_change->num_assoc_psets; k++){
+                        if(0 == strcmp(res_change->assoc_psets[k], pset_qualifier)){
                             flag = 1;
                             break;
                         }
                     }
-                }else{
-                    /* Just default to the first resource change in the list */
-                    res_change = (prte_res_change_t *) pmix_list_get_first(&prte_pmix_server_globals.res_changes);
-                    if(!res_change->queryable){
-                        continue;
+                    if(flag)
+                        break;
+                    
+                    /* Check the delta psets */
+                    for(k = 0; k < res_change->num_rc_psets; k++){
+                        if(0 == strcmp(res_change->rc_psets[k], pset_qualifier)){
+                            flag = 1;
+                            break;
+                        }
                     }
-                    flag = 1;
-                }
+                    
+                    if(flag)
+                        break;
 
-                if(NULL == res_change || flag == 0){
+                }
+                
+                /* There is no pending resource change for the given PSet qualifier*/
+                if(!flag){
                     continue;
                 }
 
                 /* Load the value for the requested key*/
                 kv = PMIX_NEW(prte_info_item_t);
-                if (0 == strcmp(q->keys[n], PMIX_RC_TYPE)) {
-                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_TYPE, &res_change->rc_type, PMIX_UINT8);
-                }else if (0 == strcmp(q->keys[n], PMIX_RC_DELTA)){
+                if (0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_TYPE)) {
+                    PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSETOP_TYPE, &res_change->rc_type, PMIX_UINT8);
+                }else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_OUTPUT)){
                     pmix_data_array_t _darray;
                     pmix_value_t *darray_value_ptr;
 
@@ -709,13 +665,13 @@ static void _query(int sd, short args, void *cbdata)
                     for(k = 0; k < res_change->num_rc_psets; k++){
                         PMIX_VALUE_LOAD(&darray_value_ptr[k], res_change->rc_psets[k], PMIX_STRING);
                     }
-                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_DELTA, &_darray, PMIX_DATA_ARRAY);
+                    PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSETOP_OUTPUT, &_darray, PMIX_DATA_ARRAY);
                     
                     PMIX_DATA_ARRAY_DESTRUCT(&_darray);
                 /* There might be the situation where a client specifies a special value for the PMIX_ASSOC qualifier (e.g. mpi://self). 
                  * So we might return another PMIX_ASSOC value than specified as qualifier.
                  */
-                }else if (0 == strcmp(q->keys[n], PMIX_RC_ASSOC)){
+                }else if (0 == strcmp(q->keys[n], PMIX_QUERY_PSETOP_INPUT)){
                     pmix_data_array_t _darray;
                     pmix_value_t *darray_value_ptr;
 
@@ -725,40 +681,13 @@ static void _query(int sd, short args, void *cbdata)
                     for(k = 0; k < res_change->num_assoc_psets; k++){
                         PMIX_VALUE_LOAD(&darray_value_ptr[k], res_change->assoc_psets[k], PMIX_STRING);
                     }
-                    PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, &_darray, PMIX_DATA_ARRAY);
+                    PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSETOP_INPUT, &_darray, PMIX_DATA_ARRAY);
                     
                     PMIX_DATA_ARRAY_DESTRUCT(&_darray);
 
-                    //PMIX_INFO_LOAD(&kv->info, PMIX_RC_ASSOC, res_change->associated_pset, PMIX_STRING);
+                    //PMIX_INFO_LOAD(&kv->info, PMIX_QUERY_PSETOP_INPUT, res_change->associated_pset, PMIX_STRING);
                 }
                 pmix_list_append(&results[m], &kv->super);
-                
-            //}else if (0 == strcmp(q->keys[n], "PMIX_RC_TYPE")) {
-            //    if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
-            //        continue;
-            //    }
-            //    prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
-            //    if(!res_change->queryable){
-            //        continue;
-            //    }
-            //    /* For now default to the first res change in the list */
-            //    kv = PMIX_NEW(prte_info_item_t);
-            //    PMIX_INFO_LOAD(&kv->info, "PMIX_RC_TYPE", &res_change->rc_type, PMIX_UINT8);
-            //    pmix_list_append(&results, &kv->super);
-            //
-            //} else if (0 == strcmp(q->keys[n], "PMIX_RC_PSET")) {
-            //    if(0 == pmix_list_get_size(&prte_pmix_server_globals.res_changes)){
-            //        continue;
-            //    }
-            //    
-            //    prte_res_change_t *res_change = pmix_list_get_first(&prte_pmix_server_globals.res_changes);
-            //    if(!res_change->queryable){
-            //        continue;
-            //    }
-            //    /* For now default to the first res change in the list */
-            //    kv = PMIX_NEW(prte_info_item_t);
-            //    PMIX_INFO_LOAD(&kv->info, "PMIX_RC_PSET", res_change->rc_pset, PMIX_STRING);
-            //    pmix_list_append(&results, &kv->super);
 
             } else if (0 == strcmp(q->keys[n], PMIX_JOB_SIZE)) {
                 jdata = prte_get_job_data_object(jobid);

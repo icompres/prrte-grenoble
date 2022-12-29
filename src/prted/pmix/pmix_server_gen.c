@@ -179,7 +179,7 @@ static void _client_finalized(int sd, short args, void *cbdata)
         bool rc_finalization = false;
         prte_res_change_t *res_change;
         PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-            if(PMIX_RES_CHANGE_SUB == res_change->rc_type || PMIX_RES_CHANGE_REPLACE == res_change->rc_type){
+            if(PMIX_PSETOP_SUB == res_change->rc_type || PMIX_PSETOP_REPLACE == res_change->rc_type){
                 pmix_server_pset_t *rc_pset;
                 PMIX_LIST_FOREACH(rc_pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
                     if(0 == strcmp(res_change->rc_psets[0], rc_pset->name)){
@@ -1879,7 +1879,7 @@ void pmix_server_define_res_change(int status, pmix_proc_t *sender, pmix_data_bu
     int n = 1, ret, num_dela, num_assoc;
     pmix_server_pset_t *rc_pset_ptr;
     prte_res_change_t *res_change = PMIX_NEW(prte_res_change_t);
-    pmix_res_change_type_t rc_type;
+    pmix_psetop_directive_t rc_type;
     char *delta_pset_name = (char*) malloc(PMIX_MAX_KEYLEN);
     char *assoc_pset_name = (char*) malloc(PMIX_MAX_KEYLEN);
 
@@ -1952,7 +1952,7 @@ void pmix_server_define_res_change(int status, pmix_proc_t *sender, pmix_data_bu
     PMIX_LIST_FOREACH(rc_pset_ptr, &prte_pmix_server_globals.psets, pmix_server_pset_t){
         if(0 == strcmp(rc_pset_ptr->name, res_change->rc_psets[0])){
             cur_daemon_timing_frame->res_change_size = rc_pset_ptr->num_members;
-            if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
+            if(PMIX_PSETOP_SUB == res_change->rc_type){
                 size_t p, c;
                 prte_proc_t *local_child;
                 prte_node_t *local_node = prte_get_proc_object(PRTE_PROC_MY_NAME)->node;
@@ -2135,7 +2135,7 @@ void pmix_server_unpublish_res_change(int status, pmix_proc_t *sender, pmix_data
         }
 
         
-        if(PMIX_RES_CHANGE_ADD == res_change->rc_type){
+        if(PMIX_PSETOP_ADD == res_change->rc_type){
 
             res_change->queryable = false;
             pmix_list_remove_item(&prte_pmix_server_globals.res_changes, &res_change->super);
@@ -2155,9 +2155,6 @@ void pmix_server_unpublish_res_change(int status, pmix_proc_t *sender, pmix_data
         break;
         
     }
-
-
-
     free(rc_pset);
     
 }
@@ -2280,7 +2277,7 @@ void pmix_server_res_change_complete(int status, pmix_proc_t *sender, pmix_data_
                 continue;
             }
 
-            if(PMIX_RES_CHANGE_SUB == res_change->rc_type){
+            if(PMIX_PSETOP_SUB == res_change->rc_type){
                 
                 update_job_data_sub(res_change);
 

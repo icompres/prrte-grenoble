@@ -567,6 +567,7 @@ void prte_data_server(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffe
     case PRTE_PMIX_LOOKUP_CMD:
         prte_output_verbose(1, prte_data_server_output, "%s data server: lookup data from %s",
                             PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), PRTE_NAME_PRINT(sender));
+                            
         /* unpack the requestor */
         count = 1;
         if (PMIX_SUCCESS != (ret = PMIx_Data_unpack(NULL, buffer, &requestor, &count, PMIX_PROC))) {
@@ -655,13 +656,15 @@ void prte_data_server(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffe
                 if (NULL == data) {
                     continue;
                 }
-                /* for security reasons, can only access data posted by the same user id */
+                /* FIXME: Need to provide user id when publishing on bhalve of client during psetop. For now skip. */
+                /* for security reasons, can only access data posted by the same user id 
                 if (uid != data->uid) {
                     prte_output_verbose(10, prte_data_server_output, "%s\tMISMATCH UID %u %u",
                                         PRTE_NAME_PRINT(PRTE_PROC_MY_NAME), (unsigned) uid,
                                         (unsigned) data->uid);
                     continue;
                 }
+                */
                 /* if the published range is constrained to namespace, then only
                  * consider this data if the publisher is
                  * in the same namespace as the requestor */
@@ -674,12 +677,14 @@ void prte_data_server(int status, pmix_proc_t *sender, pmix_data_buffer_t *buffe
                         continue;
                     }
                 }
+
                 /* Also check if the Pset names match */
                 if(NULL != pset_name || NULL != data->pset_name){
                     if(NULL == pset_name || NULL == data->pset_name || 0 != strcmp(pset_name, data->pset_name)){
                         continue;
                     }
                 }
+
                 /* see if we have this key */
                 for (n = 0; n < data->ninfo; n++) {
                     prte_output_verbose(10, prte_data_server_output, "%s COMPARING %s %s",

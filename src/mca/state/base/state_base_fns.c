@@ -733,7 +733,7 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         size_t p;
         prte_res_change_t *res_change;
         PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-            if(res_change->rc_type != PMIX_RES_CHANGE_SUB && res_change->rc_type != PMIX_RES_CHANGE_REPLACE){
+            if(res_change->rc_type != PMIX_PSETOP_SUB && res_change->rc_type != PMIX_PSETOP_REPLACE){
                 continue;
             }
             pmix_server_pset_t *pset;

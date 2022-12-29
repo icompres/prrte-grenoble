@@ -1088,7 +1088,7 @@ int main(int argc, char *argv[])
 
     /* Set the highest job rank in the setop server */
     size_t nprocs = prte_get_job_data_object(spawnednspace)->num_procs;    
-    set_highest_job_rank(spawnednspace, nprocs);
+    set_highest_job_rank(spawnednspace, nprocs - 1);
 
     /* create a pset for the job */
     char *pset_name = strdup("RM://jobs/0");
@@ -1423,7 +1423,7 @@ bool node_reserved_by_number(prte_node_t *node, size_t reservation_number){
 }
 
 
-static pmix_status_t parse_rc_cmd(char *cmd, pmix_res_change_type_t *_rc_type, size_t *nprocs){
+static pmix_status_t parse_rc_cmd(char *cmd, pmix_psetop_directive_t *_rc_type, size_t *nprocs){
 
     char * token= strtok(cmd, " ");
     if(token==NULL || 0!=strncmp(token, "pmix_session", 12)){
@@ -1432,8 +1432,8 @@ static pmix_status_t parse_rc_cmd(char *cmd, pmix_res_change_type_t *_rc_type, s
 
     token= strtok(NULL, " ");
     if(token == NULL)return PMIX_ERR_BAD_PARAM;
-    if(0 == strncmp(token, "add", 3))*_rc_type = PMIX_RES_CHANGE_ADD;
-    else if(0 == strncmp(token, "sub", 3))*_rc_type = PMIX_RES_CHANGE_SUB;
+    if(0 == strncmp(token, "add", 3))*_rc_type = PMIX_PSETOP_ADD;
+    else if(0 == strncmp(token, "sub", 3))*_rc_type = PMIX_PSETOP_SUB;
     else return PMIX_ERR_BAD_PARAM;
 
     token = strtok(NULL, " ");
@@ -2401,7 +2401,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
             PRTE_ERROR_LOG(rc);
             return;
         }
-        if(PMIX_RES_CHANGE_ADD == setop->op){
+        if(PMIX_PSETOP_ADD == setop->op){
             setup_resource_add_new(*client_ptr, setop->output_names[0].data.string, reservation_number);
             ++num_add;
         }
@@ -2411,11 +2411,12 @@ static void _rchandler_new(int sd, short args, void *cbdata)
 
     /* And launch new procs*/
     if(0 < num_add){
-        prte_ophandle_inform_daemons(info_rc_op_handle, PMIX_RES_CHANGE_ADD);
+        prte_ophandle_inform_daemons(info_rc_op_handle, PMIX_PSETOP_ADD);
 
         prte_state_caddy_t *cd = PMIX_NEW(prte_state_caddy_t);
         cd->jdata = prte_get_job_data_object(client_ptr->nspace);;
         cd->job_state = PRTE_JOB_STATE_LAUNCH_APPS;
+        cd->ev.ev_base = prte_event_base;
         prte_plm_base_launch_apps(0,0, cd);
     }
 
@@ -2428,7 +2429,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
             return;
         }
 
-        if(PMIX_RES_CHANGE_SUB == setop->op){
+        if(PMIX_PSETOP_SUB == setop->op){
             job_data_after = PMIX_NEW(prte_job_t);
             setup_resource_sub_new(*client_ptr, job_data_prev, job_data_after, setop->output_names[0].data.string);
             ++num_sub;
@@ -2451,7 +2452,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
         }
         return; 
     }
-    
+
     /* 4. SUB: retrieve the data needed by the "launcher" && send "launch" command to daemons
      * When removing procs we need to do this before we make the query info available
      */
@@ -2459,11 +2460,11 @@ static void _rchandler_new(int sd, short args, void *cbdata)
         prte_state_caddy_t *cd = PMIX_NEW(prte_state_caddy_t);
         cd->jdata = job_data_after;
         cd->job_state = PRTE_JOB_STATE_SUB;
-        
+        cd->ev.ev_base = prte_event_base;
         prte_plm_base_launch_apps(0,0, cd);
                 
         /* 5. Inform daemons about res change so they can answer related queries */
-        prte_ophandle_inform_daemons(info_rc_op_handle, PMIX_RES_CHANGE_SUB);
+        prte_ophandle_inform_daemons(info_rc_op_handle, PMIX_PSETOP_SUB);
 
         /* We created a copy of the job data so release it here */
         PMIX_RELEASE(job_data_after);
@@ -2607,7 +2608,6 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
     /* Increment the current reservation number. This will be the reservation number for this resource change as well as the alloc id */
     reservation_number = ++cur_alloc_reservation_number;
 
-
     /* Setp 1: UNLOAD buffer */
     n = 1;
     /* Unload the client proc */
@@ -2660,7 +2660,7 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
 
     for(n = 0; n < info_rc_op_handle->value.data.darray->size; n++){
 
-        if(PMIX_CHECK_KEY(&info_ptr[n], PMIX_RC_TYPE)){
+        if(PMIX_CHECK_KEY(&info_ptr[n], PMIX_PSETOP_TYPE)){
             rc_type = info_ptr[n].value.data.uint8;
         }else if(PMIX_CHECK_KEY(&info_ptr[n], "mpi.op_info")){            
             info_ptr2 = (pmix_info_t *) info_ptr[n].value.data.darray->array;
@@ -2699,7 +2699,7 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
      * We will communicate with the scheduler once the processes on the resources have terminated.
      */
 
-    if(PMIX_RES_CHANGE_ADD != rc_type){
+    if(PMIX_PSETOP_ADD != rc_type){
         
         /* No info provided so no release func needed */
         alloc_cbfunc(PMIX_SUCCESS, NULL, 0, alloc_cbdata, NULL, NULL);
@@ -2762,7 +2762,11 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
 
         return;
     }
-    exit(1);
+    //printf("not enough rsources.\n");
+    surrender_reservation(reservation_number);
+    ret = PMIX_ERR_OUT_OF_RESOURCE;
+    goto ERROR;
+    
     /* Step 5:
      * We could not satisfy the request using our own resources, so we ask the scheduler for help
      * Send an allocation request to the scheduler. The alloc_cb will be triggered once the scheduler responds

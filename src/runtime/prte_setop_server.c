@@ -247,7 +247,7 @@ int prte_ophandle_get_nth_op(pmix_info_t *rc_handle, size_t index, prte_setop_t 
     for(n = 0; n < nsetop_info; n++){
         
         /* Get the op type */
-        if(PMIX_CHECK_KEY(&setop_info[n], PMIX_RC_TYPE)){
+        if(PMIX_CHECK_KEY(&setop_info[n], PMIX_PSETOP_TYPE)){
             setop->op = setop_info[n].value.data.uint8;
         }else if(PMIX_CHECK_KEY(&setop_info[n], "mpi.op_info")){            
             info2 = (pmix_info_t *) setop_info[n].value.data.darray->array;
@@ -298,7 +298,7 @@ pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle){
             return rc;
         }
 
-        if((PMIX_RES_CHANGE_ADD == setop->op || PMIX_RES_CHANGE_SUB == setop->op || PMIX_RES_CHANGE_REPLACE == setop->op) && 
+        if((PMIX_PSETOP_ADD == setop->op || PMIX_PSETOP_SUB == setop->op || PMIX_PSETOP_REPLACE == setop->op) && 
             0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes))
         {
             return PMIX_ERR_EXISTS;
@@ -625,14 +625,14 @@ pmix_status_t set_op_exec(pmix_proc_t client, prte_setop_t *setop, size_t *noutp
 
     /* Execute the operation */    
     switch(setop->op){
-        case PMIX_RES_CHANGE_ADD:{
+        case PMIX_PSETOP_ADD:{
             *noutput = 1;
             *result = (pmix_proc_t **) malloc(*noutput * sizeof(pmix_proc_t *));
             *nmembers = malloc(*noutput * sizeof(size_t));
             ret = pset_add(client, psets, setop->n_input_names, setop->op_info, setop->n_op_info, &(*result)[0], *nmembers);
             break;
         }
-        case PMIX_RES_CHANGE_SUB:{
+        case PMIX_PSETOP_SUB:{
             *noutput = 1;
             *result = (pmix_proc_t **) malloc(*noutput * sizeof(pmix_proc_t *));
             *nmembers = malloc(*noutput * sizeof(size_t));
@@ -741,10 +741,10 @@ pmix_status_t pset_op_exec(pmix_psetop_directive_t directive, char **input_psets
 }
 pmix_psetop_directive_t prte_pset_get_op(pmix_server_pset_t *pset){
     if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_ADD)){
-        return PMIX_RES_CHANGE_ADD;
+        return PMIX_PSETOP_ADD;
     }
     if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_SUB)){
-        return PMIX_RES_CHANGE_SUB;
+        return PMIX_PSETOP_SUB;
     }
     if(PRTE_FLAG_TEST(pset, PRTE_PSET_FLAG_UNION)){
         return PMIX_PSETOP_UNION;
@@ -761,10 +761,10 @@ pmix_psetop_directive_t prte_pset_get_op(pmix_server_pset_t *pset){
 
 void prte_pset_set_flags(pmix_server_pset_t *pset, pmix_psetop_directive_t op){
     switch(op){
-        case PMIX_RES_CHANGE_ADD:
+        case PMIX_PSETOP_ADD:
             PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_ADD);
             return;
-        case PMIX_RES_CHANGE_SUB:
+        case PMIX_PSETOP_SUB:
             PRTE_FLAG_SET(pset, PRTE_PSET_FLAG_SUB);
             return;
         case PMIX_PSETOP_UNION:
@@ -780,8 +780,7 @@ void prte_pset_set_flags(pmix_server_pset_t *pset, pmix_psetop_directive_t op){
 }
 
 void setop_pub_cbfunc(pmix_status_t status, void *cbdata){
-    PRTE_ERROR_LOG(status);
-    exit(1);
+    return;
 }
 
 int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index_start, size_t *op_index_end){
@@ -831,7 +830,7 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
             PRTE_ERROR_LOG(ret);
             return ret;
         }
-        
+
         /* noop */
         if(PMIX_PSETOP_NULL == setop->op){
             PMIX_RELEASE(setop);
