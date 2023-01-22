@@ -298,8 +298,10 @@ pmix_status_t prte_op_handle_verify(pmix_info_t *op_handle){
             return rc;
         }
 
-        if((PMIX_PSETOP_ADD == setop->op || PMIX_PSETOP_SUB == setop->op || PMIX_PSETOP_REPLACE == setop->op) && 
-            0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes))
+        if((PMIX_PSETOP_ADD == setop->op || PMIX_PSETOP_SUB == setop->op || 
+            PMIX_PSETOP_REPLACE == setop->op || 
+            PMIX_PSETOP_GROW == setop->op  || PMIX_PSETOP_SHRINK == setop->op) 
+            && 0 < pmix_list_get_size(&prte_pmix_server_globals.res_changes))
         {
             return PMIX_ERR_EXISTS;
             PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
@@ -541,6 +543,7 @@ static pmix_status_t pset_add(pmix_proc_t client, pmix_server_pset_t **psets, si
         }
     }
     if(0 == num_procs){
+        printf("0 == num_procs");
         return PMIX_ERR_BAD_PARAM;
     }
 
@@ -617,6 +620,7 @@ pmix_status_t set_op_exec(pmix_proc_t client, prte_setop_t *setop, size_t *noutp
         }
         /* Pset not found */
         if(NULL == psets[n]){
+            printf("PRRTE setop exec: Did not find PSet %s\n", input_psets[n]);
             free(psets);
             return PMIX_ERR_BAD_PARAM;
         }
@@ -637,6 +641,49 @@ pmix_status_t set_op_exec(pmix_proc_t client, prte_setop_t *setop, size_t *noutp
             *result = (pmix_proc_t **) malloc(*noutput * sizeof(pmix_proc_t *));
             *nmembers = malloc(*noutput * sizeof(size_t));
             ret = pset_sub(client, psets, setop->n_input_names, setop->op_info, setop->n_op_info, &(*result)[0], *nmembers);
+            break;
+        }
+        case PMIX_PSETOP_GROW:{
+            *noutput = 2;
+            *result = (pmix_proc_t **) malloc(*noutput * sizeof(pmix_proc_t *));
+            *nmembers = malloc(*noutput * sizeof(size_t));
+            ret = pset_add(client, psets, setop->n_input_names, setop->op_info, setop->n_op_info, &(*result)[0], &(*nmembers)[0]);
+            if(PMIX_SUCCESS != ret){
+                break;
+            }
+
+            pset_list_iter = PMIX_NEW(pmix_server_pset_t);
+            pset_list_iter->members = (*result[0]);
+            pset_list_iter->num_members = (*nmembers)[0];
+
+            psets = realloc(psets, 2 * sizeof(pmix_server_pset_t *));
+            psets[1] = pset_list_iter;
+            ret = pset_union(psets, setop->n_input_names + 1, &(*result)[1], &(*nmembers)[1]);
+            pset_list_iter->members = NULL;
+            PMIX_RELEASE(pset_list_iter);
+
+            break;
+        }
+        case PMIX_PSETOP_SHRINK:{
+            *noutput = 2;
+            *result = (pmix_proc_t **) malloc(*noutput * sizeof(pmix_proc_t *));
+            *nmembers = malloc(*noutput * sizeof(size_t));
+            ret = pset_sub(client, psets, setop->n_input_names, setop->op_info, setop->n_op_info, &(*result)[0], &(*nmembers)[0]);
+            if(PMIX_SUCCESS != ret){
+                break;
+            }
+
+            
+            pset_list_iter = PMIX_NEW(pmix_server_pset_t);
+            pset_list_iter->members = (*result[0]);
+            pset_list_iter->num_members = (*nmembers)[0];
+
+            psets = realloc(psets, 2 * sizeof(pmix_server_pset_t *));
+            psets[1] = pset_list_iter;
+            ret = pset_difference(psets, setop->n_input_names + 1, &(*result)[1], &(*nmembers)[1]);
+            pset_list_iter->members = NULL;
+            PMIX_RELEASE(pset_list_iter);
+
             break;
         }
         case PMIX_PSETOP_UNION: {
@@ -660,8 +707,9 @@ pmix_status_t set_op_exec(pmix_proc_t client, prte_setop_t *setop, size_t *noutp
             ret = pset_intersection(psets, setop->n_input_names, &(*result)[0], *nmembers);
             break;
         }
-        default: 
-            ret = PMIX_ERR_BAD_PARAM;
+        default:
+        printf("Unknown op: %d\n", setop->op); 
+        ret = PMIX_ERR_BAD_PARAM;
     }
 
 
@@ -881,7 +929,15 @@ int ophandle_execute(pmix_proc_t client, pmix_info_t *rc_handle, size_t op_index
             pset->name = strdup(setop->output_names[i].data.string);
             pset->num_members = pset_sizes[i];
 
-            prte_pset_set_flags(pset, setop->op);
+            /* Set the flag to indicate the operation that created this PSet */
+            if(PMIX_PSETOP_GROW == setop->op){
+                prte_pset_set_flags(pset, 0 == i ? PMIX_PSETOP_ADD : PMIX_PSETOP_UNION);
+            }else if(PMIX_PSETOP_SHRINK == setop->op){
+                prte_pset_set_flags(pset, 0 == i ? PMIX_PSETOP_SUB : PMIX_PSETOP_DIFFERENCE);
+            }else{
+                prte_pset_set_flags(pset, setop->op);
+            }
+
             PMIX_PROC_CREATE(pset->members, pset->num_members);
             memcpy(pset->members, member_arrays[i], pset_sizes[i] * sizeof(pmix_proc_t));
 
@@ -980,9 +1036,17 @@ pmix_status_t prte_ophandle_inform_daemons(pmix_info_t *info_rc_op_handle, pmix_
             PRTE_ERROR_LOG(ret);
             return ret;
         }
-        if(setop->op != op){
-            PMIX_RELEASE(setop);
-            continue;
+
+        if(PMIX_PSETOP_ADD == op){
+            if(PMIX_PSETOP_ADD != setop->op && PMIX_PSETOP_GROW != setop->op){
+                PMIX_RELEASE(setop);
+                continue;
+            }
+        }else if(PMIX_PSETOP_SUB == op){
+            if(PMIX_PSETOP_SUB != setop->op && PMIX_PSETOP_SHRINK != setop->op){
+                PMIX_RELEASE(setop);
+                continue;
+            }            
         }
 
         ninput = setop->n_input_names;

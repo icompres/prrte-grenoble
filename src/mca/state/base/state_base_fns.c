@@ -729,16 +729,15 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
         }
         /* track job status & resource change status */
         jdata->num_terminated++;
-
         size_t p;
         prte_res_change_t *res_change;
         PMIX_LIST_FOREACH(res_change, &prte_pmix_server_globals.res_changes, prte_res_change_t){
-            if(res_change->rc_type != PMIX_PSETOP_SUB && res_change->rc_type != PMIX_PSETOP_REPLACE){
+            if(res_change->rc_type != PMIX_PSETOP_SUB && res_change->rc_type != PMIX_PSETOP_REPLACE && res_change->rc_type != PMIX_PSETOP_SHRINK){
                 continue;
             }
             pmix_server_pset_t *pset;
             PMIX_LIST_FOREACH(pset, &prte_pmix_server_globals.psets, pmix_server_pset_t){
-                /* Note: So far the first delat pset always is the subtraction (in case of replace)*/
+                /* Note: So far the first output pset always is the subtraction (in case of replace)*/
                 if(0 == strcmp(res_change->rc_psets[0], pset->name)){
                     
                     for(p = 0; p < pset->num_members; p++){
@@ -776,7 +775,6 @@ void prte_state_base_track_procs(int fd, short argc, void *cbdata)
                         PMIX_ERROR_LOG(ret);
                         return;
                     }
-                    //printf("sending RES_CHANGE_FINALIZE to %s\n", PRTE_NAME_PRINT(&_target));
                     //prte_rml.send_buffer_nb(&_target, buf, PRTE_RML_TAG_MALLEABILITY, prte_rml_send_callback, NULL);
                     PRTE_RML_SEND(ret, _target.rank, buf, PRTE_RML_TAG_MALLEABILITY);
                 }

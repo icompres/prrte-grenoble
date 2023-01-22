@@ -2004,7 +2004,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
             PRTE_ERROR_LOG(rc);
             return;
         }
-        if(PMIX_PSETOP_ADD == setop->op){
+        if(PMIX_PSETOP_ADD == setop->op || PMIX_PSETOP_GROW == setop->op){
             setup_resource_add_new(*client_ptr, setop->output_names[0].data.string, reservation_number);
             ++num_add;
         }
@@ -2032,7 +2032,7 @@ static void _rchandler_new(int sd, short args, void *cbdata)
             return;
         }
 
-        if(PMIX_PSETOP_SUB == setop->op){
+        if(PMIX_PSETOP_SUB == setop->op || PMIX_PSETOP_SHRINK == setop->op){
             job_data_after = PMIX_NEW(prte_job_t);
             setup_resource_sub_new(*client_ptr, job_data_prev, job_data_after, setop->output_names[0].data.string);
             ++num_sub;
@@ -2341,7 +2341,7 @@ void prte_master_process_alloc_req(int status, pmix_proc_t *sender, pmix_data_bu
      * We will communicate with the scheduler once the processes on the resources have terminated.
      */
 
-    if(PMIX_PSETOP_ADD != rc_type){
+    if(PMIX_PSETOP_ADD != rc_type && PMIX_PSETOP_GROW != rc_type){
         
         /* No info provided so no release func needed */
         alloc_cbfunc(PMIX_SUCCESS, NULL, 0, alloc_cbdata, NULL, NULL);
