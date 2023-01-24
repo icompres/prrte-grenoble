@@ -35,7 +35,8 @@ AM_CFLAGS = \
             -DPRTE_CC_ABSOLUTE="\"@PRTE_CC_ABSOLUTE@\"" \
             -DPRTE_GREEK_VERSION="\"@PRTE_GREEK_VERSION@\"" \
             -DPRTE_REPO_REV="\"@PRTE_REPO_REV@\"" \
-            -DPMIX_RELEASE_DATE="\"@PMIX_RELEASE_DATE@\""
+            -DPMIX_RELEASE_DATE="\"@PMIX_RELEASE_DATE@\"" \
+            -I(DEEPSEA_INSTALL)/include 
 
 bin_PROGRAMS = prte
 
@@ -46,6 +47,7 @@ prte_LDADD = \
     $(prte_libevent_LIBS) \
     $(prte_hwloc_LIBS) \
     $(prte_pmix_LIBS) \
+    $(DEEPSEA_INSTALL)/lib/ -ldeepsea \
 	$(top_builddir)/src/libprrte.la
 
 install-exec-hook:

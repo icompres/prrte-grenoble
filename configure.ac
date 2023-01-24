@@ -988,6 +988,14 @@ AC_CONFIG_FILES([
 
 PRTE_CONFIG_FILES
 
+# deep_sea_plugin
+AC_ARG_WITH([deepsea],
+	    [AS_HELP_STRING([--with-deepsea DeepSea path (required)])],
+			    [deepsea_install="${withval}"], 
+			    [deepsea_install=""])
+
+AC_SUBST([DEEPSEA_INSTALL],    [${deepsea_install}])
+
 AC_OUTPUT
 
 PRTE_SUMMARY_PRINT
